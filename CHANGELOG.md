@@ -1,3 +1,21 @@
+# 0.14.1
+
+## Fixed
+
+- Fix bytes to read when cache disabled for certain filepath ([#511])
+
+[#511]: https://github.com/dentiny/duck-read-cache-fs/pull/511
+
+- Fix LRU-based persistent cache file to be access-based eviction ([#514])
+
+[#514]: https://github.com/dentiny/duck-read-cache-fs/pull/514
+
+## Improved
+
+- Save per-chunk SHA256 checksum calculation ([#512])
+
+[#512]: https://github.com/dentiny/duck-read-cache-fs/pull/512
+
 # 0.14.0
 
 ## Added
