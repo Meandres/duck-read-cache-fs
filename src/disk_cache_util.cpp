@@ -168,6 +168,10 @@ DiskCacheUtil::GetLocalCacheFile(const RemoteFileCachePathInfo &path_info, idx_t
 	};
 }
 
+/*static*/ bool DiskCacheUtil::IsTempCacheFile(const string &filename) {
+	return StringUtil::EndsWith(filename, TEMP_CACHE_FILE_SUFFIX);
+}
+
 /*static*/ string DiskCacheUtil::GetLocalCacheFilePrefix(const string &remote_file) {
 	duckdb::hash_bytes remote_file_sha256_val;
 	string remote_file_sha256_hex;
@@ -356,7 +360,7 @@ DiskCacheUtil::ResolveLocalCacheDestination(const string &cache_directory, const
 	for (const auto &cache_directory : cache_directories) {
 		local_filesystem.ListFiles(
 		    cache_directory, [&temp_file_paths, &cache_directory](const string &fname, bool /*unused*/) {
-			    if (!StringUtil::EndsWith(fname, TEMP_CACHE_FILE_SUFFIX)) {
+			    if (!IsTempCacheFile(fname)) {
 				    return;
 			    }
 			    temp_file_paths.emplace_back(StringUtil::Format("%s/%s", cache_directory, fname));
