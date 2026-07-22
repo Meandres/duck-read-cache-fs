@@ -20,6 +20,23 @@
 // GET cost 1.40 ms warm (2.25 ms random over a 25 GB object) and transferred at
 // ~0.69 GB/s per request. So latency_us=1400, bandwidth_gbps=0.7 reproduces a
 // fast same-datacenter store; 20000-40000 us is the range for real S3.
+//
+// Validated end-to-end at 1400/0.7 against that MinIO setup, same binary and
+// query (full 16-column scan of TPC-H SF100 lineitem, 16 threads):
+//
+//                       real MinIO    simulated    error
+//   uncached, cold         10.9 s       11.3 s     +3.7%
+//   cached, cold           15.3 s       16.4 s     +7.0%
+//   cached, warm           8.87 s       8.85 s     -0.3%
+//
+// Two known modelling limits, both measured:
+//   * std::this_thread::sleep_for overshoots by ~100 us per request (timer
+//     slack), so short latencies overcharge slightly -- conservative.
+//   * The charge only makes sense on the request pattern the calibration was
+//     measured under. DuckDB's reader coalesces reads for REMOTE files only,
+//     which is why CacheFileSystem reports wrapped files as remote while
+//     simulation is active; without that, local files see thousands of small
+//     uncoalesced reads and the same knobs overcharge ~3.5x.
 
 #pragma once
 

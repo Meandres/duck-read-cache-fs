@@ -206,6 +206,10 @@ public:
 		return internal_filesystem->CanSeek();
 	}
 	bool OnDiskFile(FileHandle &handle) override {
+		auto state = instance_state.lock();
+		if (state && (state->config.sim_latency_us > 0 || state->config.sim_bandwidth_gbps > 0.0)) {
+			return false;
+		}
 		auto &disk_cache_handle = handle.Cast<CacheFileSystemHandle>();
 		return internal_filesystem->OnDiskFile(*disk_cache_handle.internal_file_handle);
 	}
