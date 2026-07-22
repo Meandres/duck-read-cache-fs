@@ -12,6 +12,7 @@
 #include "in_mem_cache_data_entry.hpp"
 #include "in_memory_data_cache_storage.hpp"
 #include "mutex.hpp"
+#include "policy_data_cache_storage.hpp"
 
 namespace duckdb {
 
@@ -36,6 +37,9 @@ public:
 	                  uint64_t requested_bytes_to_read, uint64_t file_size) override;
 	vector<DataCacheEntryInfo> GetCacheEntriesInfo() const override;
 	void RemapInMemoryDataBlocksForNewBlockSize(idx_t new_block_size) override;
+
+	// Per-group counters, empty unless the 'policy' storage backend is in use.
+	vector<PolicyGroupStats> GetPolicyStats() const;
 
 private:
 	// Process a single cache read chunk in a worker thread.

@@ -135,6 +135,45 @@ struct InstanceConfig {
 	// Storage backend used by both `InMemoryCacheReader` and `DiskCacheReader`'s in-mem layer.
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
 
+	// --- uCache simulation ---------------------------------------------------
+	// Two independent axes, so a run can hold one fixed while moving the other.
+	//
+	// Axis 1, cache entry granularity: 'fixed' keeps the stock block grid;
+	// 'column_chunk' makes each entry one Parquet column chunk, for files whose
+	// layout has been registered.
+	string chunking = *DEFAULT_CHUNKING;
+
+	// Axis 2, replacement. Only consulted by the 'policy' storage backend,
+	// which is bounded by BYTES rather than entry count because column chunks
+	// are variable-sized.
+	//
+	// [in_mem_cache_bytes] is the TOTAL budget across every group. Hold it
+	// equal across configurations and the comparison is memory-fair whatever
+	// the partitioning.
+	idx_t in_mem_cache_bytes = DEFAULT_IN_MEM_CACHE_BYTES;
+	string eviction_policy = *DEFAULT_EVICTION_POLICY;
+	// 'global' = one policy instance and one budget for everything;
+	// 'per_file' = honour [file_policies], giving each matched file its own
+	// policy instance AND its own slice of the budget.
+	string policy_scope = *DEFAULT_POLICY_SCOPE;
+	// ';'-separated `pattern=policy[:size]`. [pattern] matches as a substring of
+	// the path; [size] is a byte count or a percentage of [in_mem_cache_bytes].
+	// Groups with no size share whatever the sized ones leave, the catch-all
+	// group included. So all three of these are expressible:
+	//   'lineitem=fifo;orders=clock'              -> equal thirds
+	//   'lineitem=fifo:75%;orders=clock:15%'      -> explicit split, 10% left over
+	//   'lineitem=mru:8000000000'                 -> absolute bytes for one file
+	string file_policies;
+
+	// --- remote simulation ---------------------------------------------------
+	// Charge every cache miss what an object-store GET would cost, so local
+	// Parquet files can stand in for remote ones:
+	//     delay_us = sim_latency_us + bytes / (sim_bandwidth_gbps * 1000)
+	// Both 0 (the default) means no simulation. Applies to every cache type,
+	// including 'noop', so the no-caching baseline pays the same miss cost.
+	idx_t sim_latency_us = DEFAULT_SIM_LATENCY_US;
+	double sim_bandwidth_gbps = DEFAULT_SIM_BANDWIDTH_GBPS;
+
 	// Metadata cache config
 	bool enable_metadata_cache = DEFAULT_ENABLE_METADATA_CACHE;
 	idx_t max_metadata_cache_entry = DEFAULT_MAX_METADATA_CACHE_ENTRY;

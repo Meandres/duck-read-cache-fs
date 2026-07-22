@@ -2,6 +2,10 @@
 
 #include "cache_httpfs_extension.hpp"
 
+#include "parquet_layout_registry.hpp"
+#include "policy/eviction_policy.hpp"
+#include "policy_stats_query_function.hpp"
+
 #include <algorithm>
 #include <csignal>
 
@@ -164,6 +168,9 @@ void WrapCacheFileSystem(const DataChunk &args, ExpressionState &state, Vector &
 	auto &opener_filesystem = duckdb_instance.GetFileSystem().Cast<OpenerFileSystem>();
 	auto &vfs = opener_filesystem.GetFileSystem();
 	auto internal_filesystem = vfs.ExtractSubSystem(filesystem_name);
+	if (internal_filesystem == nullptr && filesystem_name == "LocalFileSystem") {
+		internal_filesystem = LocalFileSystem::CreateLocal();
+	}
 	if (internal_filesystem == nullptr) {
 		throw InvalidInputException("Filesystem %s hasn't been registered yet! Use "
 		                            "cache_httpfs_list_registered_filesystems() to see available filesystems.",
@@ -451,6 +458,82 @@ void UpdateInMemCacheStorage(ClientContext &context, SetScope scope, Value &para
 	inst_state.config.in_mem_cache_storage = std::move(storage_str);
 }
 
+// --- uCache simulation settings ---------------------------------------------
+
+void UpdateChunking(ClientContext &context, SetScope scope, Value &parameter) {
+	auto chunking_str = parameter.ToString();
+	if (std::find(ALL_CHUNKINGS.begin(), ALL_CHUNKINGS.end(), chunking_str) == ALL_CHUNKINGS.end()) {
+		auto valid_values =
+		    StringUtil::Join(ALL_CHUNKINGS, ALL_CHUNKINGS.size(), ", ", [](const string &s) { return s; });
+		throw InvalidInputException("Invalid cache_httpfs_chunking '%s'. Valid options are: %s", chunking_str,
+		                            valid_values);
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.chunking = std::move(chunking_str);
+}
+
+void UpdateInMemCacheBytes(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.in_mem_cache_bytes = NumericCast<idx_t>(parameter.GetValue<uint64_t>());
+}
+
+void UpdateEvictionPolicy(ClientContext &context, SetScope scope, Value &parameter) {
+	auto policy_str = parameter.ToString();
+	if (!IsValidEvictionPolicy(policy_str)) {
+		throw InvalidInputException("Invalid cache_httpfs_eviction_policy '%s'. Valid options are: lru, fifo, clock, "
+		                            "mru",
+		                            policy_str);
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.eviction_policy = std::move(policy_str);
+}
+
+void UpdatePolicyScope(ClientContext &context, SetScope scope, Value &parameter) {
+	auto scope_str = parameter.ToString();
+	if (std::find(ALL_POLICY_SCOPES.begin(), ALL_POLICY_SCOPES.end(), scope_str) == ALL_POLICY_SCOPES.end()) {
+		auto valid_values =
+		    StringUtil::Join(ALL_POLICY_SCOPES, ALL_POLICY_SCOPES.size(), ", ", [](const string &s) { return s; });
+		throw InvalidInputException("Invalid cache_httpfs_policy_scope '%s'. Valid options are: %s", scope_str,
+		                            valid_values);
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.policy_scope = std::move(scope_str);
+}
+
+void UpdateFilePolicies(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.file_policies = parameter.ToString();
+}
+
+void UpdateSimLatencyUs(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.sim_latency_us = NumericCast<idx_t>(parameter.GetValue<uint64_t>());
+}
+
+void UpdateSimBandwidthGbps(ClientContext &context, SetScope scope, Value &parameter) {
+	const auto bandwidth = parameter.GetValue<double>();
+	if (bandwidth < 0.0) {
+		throw InvalidInputException("cache_httpfs_sim_bandwidth_gbps must not be negative");
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.sim_bandwidth_gbps = bandwidth;
+}
+
+// Read the footer of the given Parquet file and record one cache extent per
+// column chunk. Returns the number of extents registered.
+void RegisterParquetLayout(const DataChunk &args, ExpressionState &state, Vector &result) {
+	ALWAYS_ASSERT(args.ColumnCount() == 1);
+	const string filepath = args.GetValue(/*col_idx=*/0, /*index=*/0).ToString();
+	auto &instance = GetDatabaseInstance(state);
+	const idx_t registered = RegisterParquetLayoutFromFooter(instance, filepath);
+	result.Reference(Value::UBIGINT(registered));
+}
+
+void ClearParquetLayouts(const DataChunk &args, ExpressionState &state, Vector &result) {
+	ParquetLayoutRegistry::Get().Clear();
+	result.Reference(Value(SUCCESS));
+}
+
 void UpdateParallelReadMode(ClientContext &context, SetScope scope, Value &parameter) {
 	auto &inst_state = GetInstanceStateOrThrow(context);
 	inst_state.config.parallel_read_mode = ParseParallelExecutorMode(parameter.ToString());
@@ -728,6 +811,60 @@ void LoadInternal(ExtensionLoader &loader) {
 	    "per-instance ObjectCache. Must be set before any cache access for the change to take effect.",
 	    LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_IN_MEM_CACHE_STORAGE, UpdateInMemCacheStorage);
 
+	// uCache simulation. Two independent axes: what a cache entry IS, and how
+	// entries are replaced. Like the settings above, all of these are read once
+	// when the cache is first built, so set them before any cache access.
+	config.AddExtensionOption(
+	    "cache_httpfs_chunking",
+	    "Granularity of an in-memory cache entry. 'fixed' (default) uses the `cache_httpfs_cache_block_size` grid. "
+	    "'column_chunk' makes each entry exactly one Parquet column chunk, for files whose layout has been "
+	    "registered with `cache_httpfs_register_parquet_layout`; files without a registered layout keep using the "
+	    "fixed grid.",
+	    LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_CHUNKING, UpdateChunking);
+	config.AddExtensionOption(
+	    "cache_httpfs_in_mem_cache_bytes",
+	    "Total byte budget for the 'policy' in-memory storage backend, across all policy groups. 0 (default) means "
+	    "unbounded. This is a byte bound rather than an entry count because column-chunk entries are "
+	    "variable-sized; hold it equal across configurations to make a comparison memory-fair.",
+	    LogicalTypeId::UBIGINT, Value::UBIGINT(DEFAULT_IN_MEM_CACHE_BYTES), UpdateInMemCacheBytes);
+	config.AddExtensionOption("cache_httpfs_eviction_policy",
+	                          "Replacement policy for the 'policy' in-memory storage backend: 'lru' (default, "
+	                          "matching the stock cache), 'fifo', 'clock', or 'mru'. 'mru' exists as a harness "
+	                          "check: on a cyclic scan it should beat the others by a wide margin, and if it does "
+	                          "not, the run is not exercising replacement at all.",
+	                          LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_EVICTION_POLICY, UpdateEvictionPolicy);
+	config.AddExtensionOption(
+	    "cache_httpfs_policy_scope",
+	    "'global' (default) gives every file one shared policy instance and one shared budget. 'per_file' honours "
+	    "`cache_httpfs_file_policies`, giving each matched file its own policy instance and its own slice of the "
+	    "budget, so a large scan cannot evict a small hot file's entries.",
+	    LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_POLICY_SCOPE, UpdatePolicyScope);
+	config.AddExtensionOption(
+	    "cache_httpfs_file_policies",
+	    "Per-file policy groups, as ';'-separated `pattern=policy[:size]` entries; [pattern] matches as a substring "
+	    "of the path and [size] is a byte count or a percentage of `cache_httpfs_in_mem_cache_bytes`. Groups "
+	    "without a size share whatever the sized ones leave, the catch-all group included. Example: "
+	    "'lineitem=fifo:75%;orders=clock:15%'. Only consulted when `cache_httpfs_policy_scope` is 'per_file'.",
+	    LogicalType {LogicalTypeId::VARCHAR}, Value(""), UpdateFilePolicies);
+
+	// Remote simulation: make local files behave like an object store, so the
+	// whole study can run without a network. A miss costs
+	// `sim_latency_us + bytes / (sim_bandwidth_gbps * 1000)` microseconds.
+	config.AddExtensionOption(
+	    "cache_httpfs_sim_latency_us",
+	    "Simulated per-request latency in microseconds, charged on every cache miss including under "
+	    "`cache_httpfs_type='noop'`. 0 (default) disables simulation. Measured against MinIO over 100 GbE on "
+	    "reference hardware, a 512 KiB range GET cost ~1400 us, so 1400 models a fast same-datacenter store and "
+	    "20000-40000 models real S3.",
+	    LogicalTypeId::UBIGINT, Value::UBIGINT(DEFAULT_SIM_LATENCY_US), UpdateSimLatencyUs);
+	config.AddExtensionOption(
+	    "cache_httpfs_sim_bandwidth_gbps",
+	    "Simulated per-request transfer rate in GIGABYTES per second (not gigabits). Requests sleep independently on "
+	    "the reader's worker threads, so the aggregate ceiling is threads x this value. 0 (default) charges latency "
+	    "only. ~0.7 matches the reference MinIO setup; lower it to make cost scale with object size, which is the "
+	    "regime where entry size matters.",
+	    LogicalTypeId::DOUBLE, Value::DOUBLE(DEFAULT_SIM_BANDWIDTH_GBPS), UpdateSimBandwidthGbps);
+
 	// Metadata cache config.
 	config.AddExtensionOption("cache_httpfs_enable_metadata_cache",
 	                          "Whether metadata cache is enable for cache filesystem. By default enabled.",
@@ -790,6 +927,22 @@ void LoadInternal(ExtensionLoader &loader) {
 	                                             ClearCacheForFile);
 	loader.RegisterFunction(clear_cache_for_file_function);
 
+	// Record one cache extent per Parquet column chunk, so that
+	// `cache_httpfs_chunking='column_chunk'` has a layout to work from. The
+	// footer is read through DuckDB's own `parquet_metadata`, which keeps this
+	// extension independent of the Parquet format.
+	ScalarFunction register_parquet_layout_function("cache_httpfs_register_parquet_layout",
+	                                                /*arguments=*/ {LogicalType {LogicalTypeId::VARCHAR}},
+	                                                /*return_type=*/LogicalType {LogicalTypeId::UBIGINT},
+	                                                RegisterParquetLayout);
+	loader.RegisterFunction(register_parquet_layout_function);
+
+	ScalarFunction clear_parquet_layouts_function("cache_httpfs_clear_parquet_layouts",
+	                                              /*arguments=*/ {},
+	                                              /*return_type=*/LogicalType {LogicalTypeId::BOOLEAN},
+	                                              ClearParquetLayouts);
+	loader.RegisterFunction(clear_parquet_layouts_function);
+
 	// Register a function to wrap all duckdb-vfs-compatible filesystems. By default only httpfs filesystem instances
 	// are wrapped. Usage for the target filesystem can be used as normal.
 	//
@@ -835,6 +988,7 @@ void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(GetGlobCacheConfigQueryFunc());
 	loader.RegisterFunction(GetCacheTypeQueryFunc());
 	loader.RegisterFunction(GetCacheConfigQueryFunc());
+	loader.RegisterFunction(GetPolicyStatsQueryFunc());
 
 	// Register filesystem registration query function.
 	loader.RegisterFunction(ListRegisteredFileSystemsQueryFunc());

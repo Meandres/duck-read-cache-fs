@@ -71,4 +71,19 @@ shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string 
                                                                    optional_ptr<DatabaseInstance> db_instance,
                                                                    size_t max_entries, uint64_t timeout_millisec);
 
+// Extra settings the byte-bounded 'policy' backend needs. Passed separately so
+// the disk reader's in-memory layer keeps using the entry-count backend through
+// the overload above, unchanged.
+struct PolicyStorageOptions {
+	idx_t max_bytes = 0;
+	string eviction_policy;
+	string file_policies;
+	bool per_file_scope = false;
+};
+
+shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string &mode,
+                                                                   optional_ptr<DatabaseInstance> db_instance,
+                                                                   size_t max_entries, uint64_t timeout_millisec,
+                                                                   const PolicyStorageOptions &policy_options);
+
 } // namespace duckdb

@@ -65,6 +65,12 @@ set(EXTENSION_SOURCES
     src/filesystem_status_query_function.cpp
     src/io_operations.cpp
     src/noop_cache_reader.cpp
+    src/utils/column_chunk_planner.cpp
+    src/policy_stats_query_function.cpp
+    src/policy_data_cache_storage.cpp
+    src/policy/eviction_policy.cpp
+    src/parquet_layout_registry.cpp
+    src/remote_simulation.cpp
     src/noop_profile_collector.cpp
     src/temp_profile_collector.cpp
     src/utils/chunk_utils.cpp

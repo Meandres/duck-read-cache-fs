@@ -38,7 +38,31 @@ const array<string, 2> ALL_PROFILE_TYPES {{"noop", "temp"}};
 // In-memory data block cache storage backend.
 const NoDestructor<string> EXT_BOUNDED_STORAGE {"extension"};
 const NoDestructor<string> OBJECT_CACHE_STORAGE {"object_cache"};
-const array<string, 2> ALL_IN_MEM_CACHE_STORAGES {{"extension", "object_cache"}};
+const NoDestructor<string> POLICY_STORAGE {"policy"};
+const array<string, 3> ALL_IN_MEM_CACHE_STORAGES {{"extension", "object_cache", "policy"}};
+
+// Cache entry granularity.
+const NoDestructor<string> FIXED_CHUNKING {"fixed"};
+const NoDestructor<string> COLUMN_CHUNK_CHUNKING {"column_chunk"};
+const array<string, 2> ALL_CHUNKINGS {{"fixed", "column_chunk"}};
+const NoDestructor<string> DEFAULT_CHUNKING {*FIXED_CHUNKING};
+
+// Scope over which one eviction policy instance applies.
+const NoDestructor<string> GLOBAL_POLICY_SCOPE {"global"};
+const NoDestructor<string> PER_FILE_POLICY_SCOPE {"per_file"};
+const array<string, 2> ALL_POLICY_SCOPES {{"global", "per_file"}};
+const NoDestructor<string> DEFAULT_POLICY_SCOPE {*GLOBAL_POLICY_SCOPE};
+
+// LRU by default, matching what the stock in-memory cache does, so switching
+// storage backend alone does not silently change replacement behaviour.
+const NoDestructor<string> DEFAULT_EVICTION_POLICY {"lru"};
+
+const idx_t DEFAULT_IN_MEM_CACHE_BYTES = 0;
+
+// Off by default: the extension must behave exactly as before unless a
+// benchmark explicitly asks for simulated remote costs.
+const idx_t DEFAULT_SIM_LATENCY_US = 0;
+const double DEFAULT_SIM_BANDWIDTH_GBPS = 0.0;
 
 // Parallel read executor mode.
 const NoDestructor<string> INTERNAL_THREAD_POOL_EXECUTOR {"internal_thread_pool"};

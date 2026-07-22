@@ -4,6 +4,7 @@
 #include "duckdb/common/exception.hpp"
 #include "extension_bounded_data_cache_storage.hpp"
 #include "object_cache_data_cache_storage.hpp"
+#include "policy_data_cache_storage.hpp"
 
 namespace duckdb {
 
@@ -15,6 +16,18 @@ shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string 
 		return make_shared_ptr<ObjectCacheStorage>(*db_instance, timeout_millisec);
 	}
 	return make_shared_ptr<ExtensionBoundedDataCacheStorage>(max_entries, timeout_millisec);
+}
+
+shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string &mode,
+                                                                   optional_ptr<DatabaseInstance> db_instance,
+                                                                   size_t max_entries, uint64_t timeout_millisec,
+                                                                   const PolicyStorageOptions &policy_options) {
+	if (mode == *POLICY_STORAGE) {
+		return make_shared_ptr<PolicyDataCacheStorage>(policy_options.max_bytes, timeout_millisec,
+		                                              policy_options.eviction_policy, policy_options.file_policies,
+		                                              policy_options.per_file_scope);
+	}
+	return BuildInMemoryDataCacheStorage(mode, db_instance, max_entries, timeout_millisec);
 }
 
 } // namespace duckdb

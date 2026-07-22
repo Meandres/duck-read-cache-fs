@@ -12,7 +12,10 @@
 #include "duckdb/main/database.hpp"
 #include "in_mem_cache_remap.hpp"
 #include "in_memory_data_cache_storage.hpp"
+#include "parquet_layout_registry.hpp"
+#include "remote_simulation.hpp"
 #include "utils/include/chunk_utils.hpp"
+#include "utils/include/column_chunk_planner.hpp"
 #include "utils/include/page_aligned_data_chunk.hpp"
 #include "utils/include/parallel_executor.hpp"
 #include "utils/include/thread_utils.hpp"
@@ -29,6 +32,13 @@ struct InMemoryCacheReaderConfig {
 	uint64_t max_subrequest_count = DEFAULT_MAX_SUBREQUEST_COUNT;
 	bool enable_cache_validation = DEFAULT_ENABLE_CACHE_VALIDATION;
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
+	// uCache simulation: entry granularity, plus the settings the byte-bounded
+	// 'policy' storage backend needs.
+	string chunking = *DEFAULT_CHUNKING;
+	idx_t in_mem_cache_bytes = DEFAULT_IN_MEM_CACHE_BYTES;
+	string eviction_policy = *DEFAULT_EVICTION_POLICY;
+	string policy_scope = *DEFAULT_POLICY_SCOPE;
+	string file_policies;
 };
 
 namespace {
@@ -42,6 +52,11 @@ InMemoryCacheReaderConfig GetConfig(const CacheHttpfsInstanceState &instance_sta
 	    .max_subrequest_count = instance_state.config.max_subrequest_count,
 	    .enable_cache_validation = instance_state.config.enable_cache_validation,
 	    .in_mem_cache_storage = instance_state.config.in_mem_cache_storage,
+	    .chunking = instance_state.config.chunking,
+	    .in_mem_cache_bytes = instance_state.config.in_mem_cache_bytes,
+	    .eviction_policy = instance_state.config.eviction_policy,
+	    .policy_scope = instance_state.config.policy_scope,
+	    .file_policies = instance_state.config.file_policies,
 	};
 }
 
@@ -76,6 +91,9 @@ void InMemoryCacheReader::ProcessCacheReadChunk(FileHandle &handle, const string
 
 	{
 		const auto latency_guard = collector.RecordOperationStart(IoOperation::kRead);
+		// Charged inside the latency guard so the profile reflects what the
+		// miss cost, exactly as a real remote fetch would.
+		SimulateRemoteRead(state->config, cache_read_chunk.chunk_size);
 		internal_filesystem->Read(*in_mem_cache_handle.internal_file_handle, content.data(),
 		                          cache_read_chunk.chunk_size, cache_read_chunk.aligned_start_offset);
 		content.length = cache_read_chunk.chunk_size;
@@ -97,11 +115,56 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 	const auto config = GetConfig(*state);
 
 	std::call_once(cache_init_flag, [this, &config, &state]() {
+		PolicyStorageOptions policy_options;
+		policy_options.max_bytes = config.in_mem_cache_bytes;
+		policy_options.eviction_policy = config.eviction_policy;
+		policy_options.file_policies = config.file_policies;
+		policy_options.per_file_scope = config.policy_scope == *PER_FILE_POLICY_SCOPE;
 		storage = BuildInMemoryDataCacheStorage(config.in_mem_cache_storage, state->db_instance,
-		                                        config.max_cache_block_count, config.cache_block_timeout_millisec);
+		                                        config.max_cache_block_count, config.cache_block_timeout_millisec,
+		                                        policy_options);
 	});
 
 	const idx_t block_size = config.cache_block_size;
+
+	// Variable-sized entries: one per Parquet column chunk. Only taken when the
+	// file's layout has been registered; every other file falls through to the
+	// fixed-block path below, which is unchanged.
+	if (config.chunking == *COLUMN_CHUNK_CHUNKING && ParquetLayoutRegistry::Get().HasLayout(handle.GetPath())) {
+		ColumnChunkPlanRequest plan_request;
+		plan_request.buffer = buffer;
+		plan_request.requested_start_offset = requested_start_offset;
+		plan_request.requested_bytes_to_read = requested_bytes_to_read;
+		plan_request.file_size = file_size;
+		plan_request.max_gap_entry_size = block_size;
+		auto planned_chunks = PlanColumnChunks(plan_request, handle.GetPath());
+
+		if (!planned_chunks.empty()) {
+			const auto planned_task_count =
+			    GetThreadCountForSubrequests(planned_chunks.size(), config.max_subrequest_count);
+			auto planned_executor =
+			    CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode, planned_task_count);
+			string planned_version_tag =
+			    config.enable_cache_validation ? handle.Cast<CacheFileSystemHandle>().GetVersionTag() : "";
+
+			idx_t planned_bytes_to_cache = 0;
+			for (auto &planned_chunk : planned_chunks) {
+				planned_bytes_to_cache += planned_chunk.chunk_size;
+				planned_executor->Schedule([this, &handle, &planned_version_tag, planned_chunk]() {
+					ProcessCacheReadChunk(handle, planned_version_tag, planned_chunk);
+				});
+			}
+			planned_executor->WaitAll();
+
+			auto &planned_cache_handle = handle.Cast<CacheFileSystemHandle>();
+			auto planned_state = instance_state.lock();
+			auto &planned_collector =
+			    GetProfileCollectorOrThrow(planned_state, planned_cache_handle.GetConnectionId());
+			planned_collector.RecordActualCacheRead(/*cache_size=*/planned_bytes_to_cache,
+			                                        /*actual_bytes=*/requested_bytes_to_read);
+			return;
+		}
+	}
 	const ReadRequestParams read_params {
 	    .requested_start_offset = requested_start_offset,
 	    .requested_bytes_to_read = requested_bytes_to_read,
@@ -209,6 +272,14 @@ vector<DataCacheEntryInfo> InMemoryCacheReader::GetCacheEntriesInfo() const {
 		});
 	}
 	return cache_entries_info;
+}
+
+vector<PolicyGroupStats> InMemoryCacheReader::GetPolicyStats() const {
+	auto *policy_storage = dynamic_cast<PolicyDataCacheStorage *>(storage.get());
+	if (policy_storage == nullptr) {
+		return {};
+	}
+	return policy_storage->GetStats();
 }
 
 void InMemoryCacheReader::ClearCache() {

@@ -39,7 +39,32 @@ extern const array<string, 2> ALL_PROFILE_TYPES;
 // In-memory data block cache storage backend.
 extern const NoDestructor<string> EXT_BOUNDED_STORAGE;
 extern const NoDestructor<string> OBJECT_CACHE_STORAGE;
-extern const array<string, 2> ALL_IN_MEM_CACHE_STORAGES;
+// Byte-bounded storage with a pluggable eviction policy and per-file groups.
+extern const NoDestructor<string> POLICY_STORAGE;
+extern const array<string, 3> ALL_IN_MEM_CACHE_STORAGES;
+
+// Cache entry granularity: fixed block grid, or one entry per column chunk.
+extern const NoDestructor<string> FIXED_CHUNKING;
+extern const NoDestructor<string> COLUMN_CHUNK_CHUNKING;
+extern const array<string, 2> ALL_CHUNKINGS;
+extern const NoDestructor<string> DEFAULT_CHUNKING;
+
+// Scope over which one eviction policy instance applies.
+extern const NoDestructor<string> GLOBAL_POLICY_SCOPE;
+extern const NoDestructor<string> PER_FILE_POLICY_SCOPE;
+extern const array<string, 2> ALL_POLICY_SCOPES;
+extern const NoDestructor<string> DEFAULT_POLICY_SCOPE;
+
+// Replacement policy used by the 'policy' storage backend.
+extern const NoDestructor<string> DEFAULT_EVICTION_POLICY;
+
+// Total byte budget for the 'policy' storage backend. 0 means unbounded, in
+// which case the entry-count bound of the other backends is what applies.
+extern const idx_t DEFAULT_IN_MEM_CACHE_BYTES;
+
+// Simulated per-request cost, for making local files behave like remote ones.
+extern const idx_t DEFAULT_SIM_LATENCY_US;
+extern const double DEFAULT_SIM_BANDWIDTH_GBPS;
 
 // Parallel read executor mode.
 extern const NoDestructor<string> INTERNAL_THREAD_POOL_EXECUTOR;
