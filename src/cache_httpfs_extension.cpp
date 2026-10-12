@@ -166,6 +166,11 @@ void WrapCacheFileSystem(const DataChunk &args, ExpressionState &state, Vector &
 	auto &opener_filesystem = duckdb_instance.GetFileSystem().Cast<OpenerFileSystem>();
 	auto &vfs = opener_filesystem.GetFileSystem();
 	auto internal_filesystem = vfs.ExtractSubSystem(filesystem_name);
+	// The local filesystem is DuckDB's default VFS rather than a registered sub-filesystem, so it cannot be extracted;
+	// wrap a fresh instance instead. This makes local files cacheable, e.g. to evaluate the cache without a remote store.
+	if (internal_filesystem == nullptr && filesystem_name == "LocalFileSystem") {
+		internal_filesystem = LocalFileSystem::CreateLocal();
+	}
 	if (internal_filesystem == nullptr) {
 		throw InvalidInputException("Filesystem %s hasn't been registered yet! Use "
 		                            "cache_httpfs_list_registered_filesystems() to see available filesystems.",

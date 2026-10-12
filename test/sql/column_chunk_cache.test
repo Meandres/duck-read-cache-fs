@@ -1,0 +1,103 @@
+# name: test/sql/column_chunk_cache.test
+# description: In-memory cache entries sized to Parquet column chunks, under a byte budget.
+# group: [sql]
+
+require cache_httpfs
+
+require parquet
+
+# Written before the local filesystem is wrapped, so it does not go through the cache.
+statement ok
+COPY (SELECT range AS a, range * 7 AS b, 'v' || (range % 1000) AS c FROM range(400000))
+TO '__TEST_DIR__/column_chunk_cache.parquet' (FORMAT parquet, ROW_GROUP_SIZE 50000);
+
+# Reference results, read without any cache.
+query III
+SELECT sum(a), sum(b), count(DISTINCT c) FROM read_parquet('__TEST_DIR__/column_chunk_cache.parquet');
+----
+79999800000	559998600000	1000
+
+query I
+SELECT sum(b) FROM read_parquet('__TEST_DIR__/column_chunk_cache.parquet') WHERE a % 3 = 0;
+----
+186667133331
+
+# Only 'block' and 'column_chunk' are accepted.
+statement error
+SET cache_httpfs_chunking='row_group';
+----
+Invalid cache_httpfs_chunking
+
+statement ok
+SELECT cache_httpfs_wrap_cache_filesystem('LocalFileSystem');
+
+statement ok
+SET cache_httpfs_type='in_mem';
+
+# A byte budget well below the file's footprint, so that entries must be evicted. The block count is set high so that
+# the byte budget is the bound that binds. Both must be set before the first cached read.
+statement ok
+SET cache_httpfs_max_in_mem_cache_block_count=1000000;
+
+statement ok
+SET cache_httpfs_max_in_mem_cache_bytes=1048576;
+
+statement ok
+SET cache_httpfs_chunking='column_chunk';
+
+query I
+SELECT cache_httpfs_register_parquet_layout('__TEST_DIR__/column_chunk_cache.parquet') > 0;
+----
+true
+
+# The footprint must exceed the budget, or the eviction checks below would be vacuous.
+query I
+SELECT sum(total_compressed_size) > 1048576 FROM parquet_metadata('__TEST_DIR__/column_chunk_cache.parquet');
+----
+true
+
+# Results through the column-chunk cache are identical to the uncached reference, including under eviction.
+query III
+SELECT sum(a), sum(b), count(DISTINCT c) FROM read_parquet('__TEST_DIR__/column_chunk_cache.parquet');
+----
+79999800000	559998600000	1000
+
+query I
+SELECT sum(b) FROM read_parquet('__TEST_DIR__/column_chunk_cache.parquet') WHERE a % 3 = 0;
+----
+186667133331
+
+# Every cached entry is exactly one column chunk, or lies wholly outside all chunks (footer): never part of a chunk.
+statement ok
+CREATE TEMP TABLE chunks AS
+SELECT least(coalesce(nullif(dictionary_page_offset, 0), data_page_offset),
+             coalesce(nullif(index_page_offset, 0), data_page_offset), data_page_offset) AS s,
+       total_compressed_size AS n
+FROM parquet_metadata('__TEST_DIR__/column_chunk_cache.parquet');
+
+statement ok
+CREATE TEMP TABLE entries AS
+SELECT start_offset AS s, end_offset - start_offset AS n
+FROM cache_httpfs_cache_status_query()
+WHERE original_remote_path LIKE '%column_chunk_cache.parquet';
+
+query I
+SELECT count(*) > 0 FROM entries;
+----
+true
+
+query I
+SELECT count(*) FROM entries e
+WHERE NOT EXISTS (SELECT 1 FROM chunks c WHERE c.s = e.s AND c.n = e.n)
+  AND EXISTS (SELECT 1 FROM chunks c WHERE e.s < c.s + c.n AND c.s < e.s + e.n);
+----
+0
+
+# The byte budget holds.
+query I
+SELECT sum(n) <= 1048576 FROM entries;
+----
+true
+
+statement ok
+SELECT cache_httpfs_clear_parquet_layouts();
