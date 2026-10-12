@@ -12,7 +12,9 @@
 #include "duckdb/main/database.hpp"
 #include "in_mem_cache_remap.hpp"
 #include "in_memory_data_cache_storage.hpp"
+#include "parquet_layout_registry.hpp"
 #include "utils/include/chunk_utils.hpp"
+#include "utils/include/column_chunk_planner.hpp"
 #include "utils/include/page_aligned_data_chunk.hpp"
 #include "utils/include/parallel_executor.hpp"
 #include "utils/include/thread_utils.hpp"
@@ -30,6 +32,7 @@ struct InMemoryCacheReaderConfig {
 	uint64_t max_subrequest_count = DEFAULT_MAX_SUBREQUEST_COUNT;
 	bool enable_cache_validation = DEFAULT_ENABLE_CACHE_VALIDATION;
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
+	string chunking = *DEFAULT_CHUNKING;
 };
 
 namespace {
@@ -44,6 +47,7 @@ InMemoryCacheReaderConfig GetConfig(const CacheHttpfsInstanceState &instance_sta
 	    .max_subrequest_count = instance_state.config.max_subrequest_count,
 	    .enable_cache_validation = instance_state.config.enable_cache_validation,
 	    .in_mem_cache_storage = instance_state.config.in_mem_cache_storage,
+	    .chunking = instance_state.config.chunking,
 	};
 }
 
@@ -105,6 +109,39 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 	});
 
 	const idx_t block_size = config.cache_block_size;
+
+	// Column-chunk-sized entries, for files whose Parquet layout is registered. Everything below this branch is the
+	// unmodified fixed-block path, which still serves every other file -- and this one too whenever the plan comes back
+	// empty, so that a request is always served in full.
+	if (config.chunking == *COLUMN_CHUNK_CHUNKING && ParquetLayoutRegistry::Get().HasLayout(handle.GetPath())) {
+		const ColumnChunkPlanRequest plan_request {
+		    .buffer = buffer,
+		    .requested_start_offset = requested_start_offset,
+		    .requested_bytes_to_read = requested_bytes_to_read,
+		    .file_size = file_size,
+		    .gap_block_size = block_size,
+		};
+		const auto planned_chunks = PlanColumnChunks(plan_request, handle.GetPath());
+		if (!planned_chunks.empty()) {
+			const auto task_count = GetThreadCountForSubrequests(planned_chunks.size(), config.max_subrequest_count);
+			auto executor = CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode, task_count);
+			const string version_tag =
+			    config.enable_cache_validation ? handle.Cast<CacheFileSystemHandle>().GetVersionTag() : "";
+			idx_t total_bytes_to_cache = 0;
+			for (const auto &chunk : planned_chunks) {
+				total_bytes_to_cache += chunk.chunk_size;
+				executor->Schedule(
+				    [this, &handle, &version_tag, chunk]() { ProcessCacheReadChunk(handle, version_tag, chunk); });
+			}
+			executor->WaitAll();
+
+			auto &collector = GetProfileCollectorOrThrow(state, handle.Cast<CacheFileSystemHandle>().GetConnectionId());
+			collector.RecordActualCacheRead(/*cache_size=*/total_bytes_to_cache,
+			                                /*actual_bytes=*/requested_bytes_to_read);
+			return;
+		}
+	}
+
 	const ReadRequestParams read_params {
 	    .requested_start_offset = requested_start_offset,
 	    .requested_bytes_to_read = requested_bytes_to_read,

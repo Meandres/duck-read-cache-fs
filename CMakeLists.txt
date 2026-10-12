@@ -61,6 +61,7 @@ set(EXTENSION_SOURCES
     src/in_memory_cache_reader.cpp
     src/in_memory_data_cache_storage.cpp
     src/object_cache_data_cache_storage.cpp
+    src/parquet_layout_registry.cpp
     src/histogram.cpp
     src/filesystem_status_query_function.cpp
     src/io_operations.cpp
@@ -68,6 +69,7 @@ set(EXTENSION_SOURCES
     src/noop_profile_collector.cpp
     src/temp_profile_collector.cpp
     src/utils/chunk_utils.cpp
+    src/utils/column_chunk_planner.cpp
     src/utils/fake_filesystem.cpp
     src/utils/page_aligned_data_chunk.cpp
     src/utils/filesystem_utils.cpp

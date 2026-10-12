@@ -38,6 +38,14 @@ extern const array<string, 2> ALL_PROFILE_TYPES;
 
 // In-memory data block cache storage backend.
 extern const NoDestructor<string> EXT_BOUNDED_STORAGE;
+
+// Granularity of in-memory cache entries.
+// 'block': fixed-size blocks of `cache_httpfs_cache_block_size` (upstream behaviour).
+// 'column_chunk': one entry per Parquet column chunk, for files whose layout was registered with
+// `cache_httpfs_register_parquet_layout`; other files keep using fixed blocks.
+extern const NoDestructor<string> BLOCK_CHUNKING;
+extern const NoDestructor<string> COLUMN_CHUNK_CHUNKING;
+extern const NoDestructor<string> DEFAULT_CHUNKING;
 extern const NoDestructor<string> OBJECT_CACHE_STORAGE;
 extern const array<string, 2> ALL_IN_MEM_CACHE_STORAGES;
 

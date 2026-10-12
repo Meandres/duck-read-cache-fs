@@ -17,6 +17,7 @@
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/opener_file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/vector_operations/unary_executor.hpp"
 #include "duckdb/main/extension_callback_manager.hpp"
 #include "duckdb/main/extension_manager.hpp"
 #include "duckdb/main/setting_info.hpp"
@@ -26,6 +27,7 @@
 #include "filesystem_status_query_function.hpp"
 #include "hffs.hpp"
 #include "httpfs_extension.hpp"
+#include "parquet_layout_registry.hpp"
 #include "s3fs.hpp"
 
 namespace duckdb {
@@ -456,6 +458,30 @@ void UpdateInMemCacheStorage(ClientContext &context, SetScope scope, Value &para
 	inst_state.config.in_mem_cache_storage = std::move(storage_str);
 }
 
+void UpdateChunking(ClientContext &context, SetScope scope, Value &parameter) {
+	auto chunking_str = parameter.ToString();
+	if (chunking_str != *BLOCK_CHUNKING && chunking_str != *COLUMN_CHUNK_CHUNKING) {
+		throw InvalidInputException("Invalid cache_httpfs_chunking '%s'. Valid options are: %s, %s", chunking_str,
+		                            *BLOCK_CHUNKING, *COLUMN_CHUNK_CHUNKING);
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.chunking = std::move(chunking_str);
+}
+
+// Read the footer of each given Parquet file and record one cache extent per column chunk. Returns, per row, the
+// number of extents registered for that file.
+void RegisterParquetLayout(DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &instance = GetDatabaseInstance(state);
+	UnaryExecutor::Execute<string_t, uint64_t>(args.data[0], result, args.size(), [&](string_t path) {
+		return static_cast<uint64_t>(RegisterParquetLayoutFromFooter(instance, path.GetString()));
+	});
+}
+
+void ClearParquetLayouts(const DataChunk &args, ExpressionState &state, Vector &result) {
+	ParquetLayoutRegistry::Get().Clear();
+	result.Reference(Value(SUCCESS));
+}
+
 void UpdateParallelReadMode(ClientContext &context, SetScope scope, Value &parameter) {
 	auto &inst_state = GetInstanceStateOrThrow(context);
 	inst_state.config.parallel_read_mode = ParseParallelExecutorMode(parameter.ToString());
@@ -728,6 +754,13 @@ void LoadInternal(ExtensionLoader &loader) {
 	    "bounds hold. A byte bound is what makes caches with different entry sizes comparable at equal capacity. Only "
 	    "supported by the 'extension' storage. Like the block count, it must be set before any cache access.",
 	    LogicalType {LogicalTypeId::UBIGINT}, Value::UBIGINT(DEFAULT_MAX_IN_MEM_CACHE_BYTES), UpdateMaxInMemCacheBytes);
+	config.AddExtensionOption(
+	    "cache_httpfs_chunking",
+	    "Granularity of in-memory cache entries. 'block' (default) caches fixed blocks of "
+	    "`cache_httpfs_cache_block_size`. 'column_chunk' caches each Parquet column chunk as one entry, for files whose "
+	    "layout was registered with `cache_httpfs_register_parquet_layout`; files without a registered layout keep "
+	    "using fixed blocks. Set it before the first read.",
+	    LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_CHUNKING, UpdateChunking);
 	config.AddExtensionOption("cache_httpfs_in_mem_cache_block_timeout_millisec",
 	                          "Data block cache entry timeout in milliseconds.", LogicalTypeId::UBIGINT,
 	                          Value::UBIGINT(DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC),
@@ -794,6 +827,21 @@ void LoadInternal(ExtensionLoader &loader) {
 	ScalarFunction clear_cache_function("cache_httpfs_clear_cache", /*arguments=*/ {},
 	                                    /*return_type=*/LogicalType {LogicalTypeId::BOOLEAN}, ClearAllCache);
 	loader.RegisterFunction(clear_cache_function);
+
+	// Record one cache extent per Parquet column chunk, which `cache_httpfs_chunking='column_chunk'` sizes entries by.
+	// Volatile: it has a side effect, so the optimizer must neither fold nor prune it.
+	ScalarFunction register_parquet_layout_function("cache_httpfs_register_parquet_layout",
+	                                                /*arguments=*/ {LogicalType {LogicalTypeId::VARCHAR}},
+	                                                /*return_type=*/LogicalType {LogicalTypeId::UBIGINT},
+	                                                RegisterParquetLayout);
+	register_parquet_layout_function.SetVolatile();
+	loader.RegisterFunction(register_parquet_layout_function);
+
+	ScalarFunction clear_parquet_layouts_function("cache_httpfs_clear_parquet_layouts", /*arguments=*/ {},
+	                                              /*return_type=*/LogicalType {LogicalTypeId::BOOLEAN},
+	                                              ClearParquetLayouts);
+	clear_parquet_layouts_function.SetVolatile();
+	loader.RegisterFunction(clear_parquet_layouts_function);
 
 	// Register cache cleanup function for the given filename.
 	ScalarFunction clear_cache_for_file_function("cache_httpfs_clear_cache_for_file",

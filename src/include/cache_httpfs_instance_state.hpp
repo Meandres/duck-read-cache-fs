@@ -135,6 +135,8 @@ struct InstanceConfig {
 	idx_t in_mem_cache_block_timeout_millisec = DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC;
 	// Storage backend used by both `InMemoryCacheReader` and `DiskCacheReader`'s in-mem layer.
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
+	// Entry granularity of the in-memory cache reader: 'block' or 'column_chunk'.
+	string chunking = *DEFAULT_CHUNKING;
 
 	// Metadata cache config
 	bool enable_metadata_cache = DEFAULT_ENABLE_METADATA_CACHE;

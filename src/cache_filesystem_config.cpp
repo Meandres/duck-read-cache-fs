@@ -38,6 +38,9 @@ const array<string, 2> ALL_PROFILE_TYPES {{"noop", "temp"}};
 // In-memory data block cache storage backend.
 const NoDestructor<string> EXT_BOUNDED_STORAGE {"extension"};
 const NoDestructor<string> OBJECT_CACHE_STORAGE {"object_cache"};
+const NoDestructor<string> BLOCK_CHUNKING {"block"};
+const NoDestructor<string> COLUMN_CHUNK_CHUNKING {"column_chunk"};
+const NoDestructor<string> DEFAULT_CHUNKING {*BLOCK_CHUNKING};
 const array<string, 2> ALL_IN_MEM_CACHE_STORAGES {{"extension", "object_cache"}};
 
 // Parallel read executor mode.
