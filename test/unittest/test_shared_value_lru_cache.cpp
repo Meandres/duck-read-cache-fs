@@ -237,3 +237,91 @@ TEST_CASE("SharedValueLru Take moves all entries and empties cache", "[shared va
 	cache.Put("c", make_shared_ptr<string>("vc"));
 	REQUIRE(cache.Get("c") != nullptr);
 }
+
+namespace {
+// Weigh a string value by its length, standing in for a cache entry's byte size.
+size_t StringWeight(const string &value) {
+	return value.size();
+}
+} // namespace
+
+TEST_CASE("SharedValueLru weight bound evicts in LRU order", "[shared value lru test]") {
+	ThreadSafeSharedValueLruCache<string, string> cache {/*max_entries=*/0, /*timeout_millisec=*/0,
+	                                                      /*max_weight=*/10, StringWeight};
+
+	cache.Put("a", make_shared_ptr<string>("aaaa")); // 4
+	cache.Put("b", make_shared_ptr<string>("bbbb")); // 8
+	REQUIRE(cache.TotalWeight() == 8);
+
+	// 8 + 4 = 12 > 10: the least recently used entry, "a", goes.
+	cache.Put("c", make_shared_ptr<string>("cccc"));
+	REQUIRE(cache.Get("a") == nullptr);
+	REQUIRE(cache.Get("b") != nullptr);
+	REQUIRE(cache.Get("c") != nullptr);
+	REQUIRE(cache.TotalWeight() == 8);
+}
+
+TEST_CASE("SharedValueLru weight bound respects recency", "[shared value lru test]") {
+	ThreadSafeSharedValueLruCache<string, string> cache {0, 0, /*max_weight=*/10, StringWeight};
+
+	cache.Put("a", make_shared_ptr<string>("aaaa"));
+	cache.Put("b", make_shared_ptr<string>("bbbb"));
+	// Touch "a" so "b" becomes the eviction candidate.
+	REQUIRE(cache.Get("a") != nullptr);
+	cache.Put("c", make_shared_ptr<string>("cccc"));
+	REQUIRE(cache.Get("a") != nullptr);
+	REQUIRE(cache.Get("b") == nullptr);
+	REQUIRE(cache.Get("c") != nullptr);
+}
+
+TEST_CASE("SharedValueLru weight accounting on replace, delete, clear, take", "[shared value lru test]") {
+	ThreadSafeSharedValueLruCache<string, string> cache {0, 0, /*max_weight=*/100, StringWeight};
+
+	cache.Put("a", make_shared_ptr<string>("aaaa"));
+	cache.Put("a", make_shared_ptr<string>("aaaaaaaa")); // replace: 4 -> 8, not 12
+	REQUIRE(cache.TotalWeight() == 8);
+
+	cache.Put("b", make_shared_ptr<string>("bb"));
+	REQUIRE(cache.TotalWeight() == 10);
+	REQUIRE(cache.Delete("a"));
+	REQUIRE(cache.TotalWeight() == 2);
+
+	cache.Clear();
+	REQUIRE(cache.TotalWeight() == 0);
+
+	cache.Put("c", make_shared_ptr<string>("ccc"));
+	auto taken = cache.Take();
+	REQUIRE(taken.size() == 1);
+	REQUIRE(cache.TotalWeight() == 0);
+}
+
+TEST_CASE("SharedValueLru entry heavier than the weight bound is not retained", "[shared value lru test]") {
+	ThreadSafeSharedValueLruCache<string, string> cache {0, 0, /*max_weight=*/5, StringWeight};
+
+	cache.Put("small", make_shared_ptr<string>("ss"));
+	cache.Put("huge", make_shared_ptr<string>("hhhhhhhhhh"));
+	// It cannot fit even alone, so it evicts everything, itself last.
+	REQUIRE(cache.Get("huge") == nullptr);
+	REQUIRE(cache.Get("small") == nullptr);
+	REQUIRE(cache.TotalWeight() == 0);
+}
+
+TEST_CASE("SharedValueLru entry and weight bounds both apply", "[shared value lru test]") {
+	// Weight would allow all three; the entry count does not.
+	ThreadSafeSharedValueLruCache<string, string> cache {/*max_entries=*/2, 0, /*max_weight=*/1000, StringWeight};
+	cache.Put("a", make_shared_ptr<string>("a"));
+	cache.Put("b", make_shared_ptr<string>("b"));
+	cache.Put("c", make_shared_ptr<string>("c"));
+	REQUIRE(cache.Get("a") == nullptr);
+	REQUIRE(cache.TotalWeight() == 2);
+}
+
+TEST_CASE("SharedValueLru without a weigher ignores the weight bound", "[shared value lru test]") {
+	// Default construction must behave exactly as before the weight bound existed.
+	ThreadSafeSharedValueLruCache<string, string> cache {/*max_entries=*/0, /*timeout_millisec=*/0};
+	for (int i = 0; i < 100; ++i) {
+		cache.Put(std::to_string(i), make_shared_ptr<string>(string(1000, 'x')));
+	}
+	REQUIRE(cache.Keys().size() == 100);
+	REQUIRE(cache.TotalWeight() == 0);
+}

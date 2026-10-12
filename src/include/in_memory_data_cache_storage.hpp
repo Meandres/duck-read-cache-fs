@@ -67,8 +67,10 @@ public:
 };
 
 // Construct the storage backend selected by [mode].
+// [max_bytes] bounds the summed data bytes; 0 means unbounded. Only the extension-managed storage supports it.
 shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string &mode,
                                                                    optional_ptr<DatabaseInstance> db_instance,
-                                                                   size_t max_entries, uint64_t timeout_millisec);
+                                                                   size_t max_entries, uint64_t timeout_millisec,
+                                                                   size_t max_bytes = 0);
 
 } // namespace duckdb

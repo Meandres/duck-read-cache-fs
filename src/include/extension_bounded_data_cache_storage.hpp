@@ -1,4 +1,4 @@
-// Extension-managed in-memory data cache: bounded by entry count and per-entry timeout.
+// Extension-managed in-memory data cache: bounded by entry count, optionally by total bytes, and per-entry timeout.
 
 #pragma once
 
@@ -16,7 +16,8 @@ class ExtensionBoundedDataCacheStorage final : public InMemoryDataCacheStorage {
 public:
 	// @param max_entries: 0 means unbounded.
 	// @param timeout_millisec: 0 means no timeout.
-	ExtensionBoundedDataCacheStorage(size_t max_entries, uint64_t timeout_millisec);
+	// @param max_bytes: bound on the summed data bytes of all entries; 0 means unbounded.
+	ExtensionBoundedDataCacheStorage(size_t max_entries, uint64_t timeout_millisec, size_t max_bytes = 0);
 
 	ExtensionBoundedDataCacheStorage(const ExtensionBoundedDataCacheStorage &) = delete;
 	ExtensionBoundedDataCacheStorage &operator=(const ExtensionBoundedDataCacheStorage &) = delete;

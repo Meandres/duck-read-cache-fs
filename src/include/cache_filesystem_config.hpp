@@ -86,6 +86,9 @@ extern const idx_t DEFAULT_DISK_READER_MEM_CACHE_TIMEOUT_MILLISEC;
 // Maximum in-memory cache block number, which caps the overall memory consumption as (block size * max block count).
 extern const idx_t DEFAULT_MAX_IN_MEM_CACHE_BLOCK_COUNT;
 
+// Maximum summed data bytes of the in-memory cache; 0 means unbounded (the block count is then the only bound).
+extern const idx_t DEFAULT_MAX_IN_MEM_CACHE_BYTES;
+
 // Default timeout in milliseconds for in-memory block cache entries.
 extern const idx_t DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC;
 

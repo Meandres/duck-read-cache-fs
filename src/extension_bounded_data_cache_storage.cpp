@@ -4,8 +4,10 @@
 
 namespace duckdb {
 
-ExtensionBoundedDataCacheStorage::ExtensionBoundedDataCacheStorage(size_t max_entries, uint64_t timeout_millisec)
-    : lru_cache(max_entries, timeout_millisec) {
+ExtensionBoundedDataCacheStorage::ExtensionBoundedDataCacheStorage(size_t max_entries, uint64_t timeout_millisec,
+                                                                   size_t max_bytes)
+    : lru_cache(max_entries, timeout_millisec, max_bytes,
+                [](const InMemCacheDataEntry &entry) { return static_cast<size_t>(entry.data.length); }) {
 }
 
 void ExtensionBoundedDataCacheStorage::Put(InMemCacheBlock key, PageAlignedDataChunk chunk, string version_tag) {

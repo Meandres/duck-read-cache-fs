@@ -24,6 +24,7 @@ namespace duckdb {
 // Runtime config for InMemoryCacheReader (fetched from instance state or defaults)
 struct InMemoryCacheReaderConfig {
 	idx_t max_cache_block_count = DEFAULT_MAX_IN_MEM_CACHE_BLOCK_COUNT;
+	idx_t max_cache_bytes = DEFAULT_MAX_IN_MEM_CACHE_BYTES;
 	idx_t cache_block_timeout_millisec = DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC;
 	idx_t cache_block_size = DEFAULT_CACHE_BLOCK_SIZE;
 	uint64_t max_subrequest_count = DEFAULT_MAX_SUBREQUEST_COUNT;
@@ -37,6 +38,7 @@ namespace {
 InMemoryCacheReaderConfig GetConfig(const CacheHttpfsInstanceState &instance_state) {
 	return InMemoryCacheReaderConfig {
 	    .max_cache_block_count = instance_state.config.max_in_mem_cache_block_count,
+	    .max_cache_bytes = instance_state.config.max_in_mem_cache_bytes,
 	    .cache_block_timeout_millisec = instance_state.config.in_mem_cache_block_timeout_millisec,
 	    .cache_block_size = instance_state.config.cache_block_size,
 	    .max_subrequest_count = instance_state.config.max_subrequest_count,
@@ -98,7 +100,8 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 
 	std::call_once(cache_init_flag, [this, &config, &state]() {
 		storage = BuildInMemoryDataCacheStorage(config.in_mem_cache_storage, state->db_instance,
-		                                        config.max_cache_block_count, config.cache_block_timeout_millisec);
+		                                        config.max_cache_block_count, config.cache_block_timeout_millisec,
+		                                        config.max_cache_bytes);
 	});
 
 	const idx_t block_size = config.cache_block_size;

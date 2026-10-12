@@ -429,6 +429,11 @@ void UpdateMaxInMemCacheBlockCount(ClientContext &context, SetScope scope, Value
 	inst_state.config.max_in_mem_cache_block_count = in_mem_block_count;
 }
 
+void UpdateMaxInMemCacheBytes(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.max_in_mem_cache_bytes = parameter.GetValue<uint64_t>();
+}
+
 void UpdateInMemCacheBlockTimeout(ClientContext &context, SetScope scope, Value &parameter) {
 	auto &inst_state = GetInstanceStateOrThrow(context);
 	const auto timeout = parameter.GetValue<uint64_t>();
@@ -716,6 +721,13 @@ void LoadInternal(ExtensionLoader &loader) {
 	                          "should be set only once before all filesystem access, otherwise there's no affect.",
 	                          LogicalType {LogicalTypeId::UBIGINT},
 	                          Value::UBIGINT(DEFAULT_MAX_IN_MEM_CACHE_BLOCK_COUNT), UpdateMaxInMemCacheBlockCount);
+	config.AddExtensionOption(
+	    "cache_httpfs_max_in_mem_cache_bytes",
+	    "Max summed data bytes of the in-memory cache; 0 (default) means unbounded, leaving "
+	    "`cache_httpfs_max_in_mem_cache_block_count` as the only bound. Entries are evicted in LRU order until both "
+	    "bounds hold. A byte bound is what makes caches with different entry sizes comparable at equal capacity. Only "
+	    "supported by the 'extension' storage. Like the block count, it must be set before any cache access.",
+	    LogicalType {LogicalTypeId::UBIGINT}, Value::UBIGINT(DEFAULT_MAX_IN_MEM_CACHE_BYTES), UpdateMaxInMemCacheBytes);
 	config.AddExtensionOption("cache_httpfs_in_mem_cache_block_timeout_millisec",
 	                          "Data block cache entry timeout in milliseconds.", LogicalTypeId::UBIGINT,
 	                          Value::UBIGINT(DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC),

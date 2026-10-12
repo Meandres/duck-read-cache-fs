@@ -32,12 +32,19 @@ public:
 	using mapped_type = shared_ptr<Val>;
 	using value_type = pair<const Key, shared_ptr<Val>>;
 	using key_compare = KeyCompare;
+	// Weight of one value, e.g. its size in bytes.
+	using Weigher = std::function<size_t(const Val &)>;
 
 	// @param max_entries_p: A `max_entries` of 0 means that there is no limit on the number of entries in the cache.
 	// @param timeout_millisec_p: Timeout in milliseconds for entries, exceeding which invalidates the cache entries; 0
 	// means no timeout.
-	SharedValueLruCache(size_t max_entries_p, uint64_t timeout_millisec_p)
-	    : max_entries(max_entries_p), timeout_millisec(timeout_millisec_p) {
+	// @param max_weight_p: Bound on the summed weight of all entries; 0 means no bound. Both bounds apply when set, and
+	// entries are evicted in LRU order until both hold.
+	// @param weigher_p: Weight of a value; required for [max_weight_p] to have any effect.
+	SharedValueLruCache(size_t max_entries_p, uint64_t timeout_millisec_p, size_t max_weight_p = 0,
+	                    Weigher weigher_p = nullptr)
+	    : max_entries(max_entries_p), timeout_millisec(timeout_millisec_p), max_weight(max_weight_p),
+	      weigher(std::move(weigher_p)) {
 	}
 
 	// Disable copy and move.
@@ -51,25 +58,26 @@ public:
 		// Check if the key already exists in the cache.
 		auto existing = entry_map.find(key);
 		if (existing != entry_map.end()) {
-			auto old_lru_iter = existing->second.lru_iterator;
-			entry_map.erase(existing);
-			lru_list.erase(old_lru_iter);
+			DeleteImpl(existing);
 		}
 
 		// Now we could insert the new key-value fresh new.
+		const size_t weight = (weigher && value) ? weigher(*value) : 0;
 		lru_list.emplace_front(key);
 		Entry new_entry {
 		    .value = std::move(value),
 		    .timestamp = static_cast<uint64_t>(GetSteadyNowMilliSecSinceEpoch()),
 		    .lru_iterator = lru_list.begin(),
+		    .weight = weight,
 		};
 		auto key_cref = std::cref(lru_list.front());
 		entry_map[key_cref] = std::move(new_entry);
+		total_weight += weight;
 
-		if (max_entries > 0 && lru_list.size() > max_entries) {
-			const auto &stale_key = lru_list.back();
-			entry_map.erase(stale_key);
-			lru_list.pop_back();
+		// An entry heavier than [max_weight] on its own evicts everything, itself last.
+		while (!lru_list.empty() && ((max_entries > 0 && lru_list.size() > max_entries) ||
+		                             (max_weight > 0 && total_weight > max_weight))) {
+			DeleteImpl(entry_map.find(lru_list.back()));
 		}
 	}
 
@@ -109,6 +117,7 @@ public:
 	void Clear() {
 		entry_map.clear();
 		lru_list.clear();
+		total_weight = 0;
 	}
 
 	// Clear cache entries that match [key_filter] starting from [start_key] inclusively.
@@ -131,6 +140,12 @@ public:
 	// Accessors for cache parameters.
 	size_t MaxEntries() const {
 		return max_entries;
+	}
+	size_t MaxWeight() const {
+		return max_weight;
+	}
+	size_t TotalWeight() const {
+		return total_weight;
 	}
 
 	// Get all keys inside of the cache; the order of keys returned is not deterministic.
@@ -161,12 +176,14 @@ public:
 			Key key = it->first.get();
 			const auto lru_iter = it->second.lru_iterator;
 			shared_ptr<Val> val = std::move(it->second.value);
+			total_weight -= it->second.weight;
 			lru_list.erase(lru_iter);
 			entry_map.erase(it);
 			result.emplace_back(std::move(key), std::move(val));
 		}
 		ALWAYS_ASSERT(entry_map.empty());
 		ALWAYS_ASSERT(lru_list.empty());
+		ALWAYS_ASSERT(total_weight == 0);
 		return result;
 	}
 
@@ -182,6 +199,9 @@ private:
 
 		// A list iterator pointing to the entry's position in the LRU list.
 		typename std::list<Key>::iterator lru_iterator;
+
+		// Weight charged against [max_weight], fixed at insertion.
+		size_t weight = 0;
 	};
 
 	using KeyConstRef = std::reference_wrapper<const Key>;
@@ -189,6 +209,7 @@ private:
 
 	// Delete key-value pairs indicated by the given entry map iterator [iter] from cache.
 	void DeleteImpl(typename EntryMap::iterator iter) {
+		total_weight -= iter->second.weight;
 		lru_list.erase(iter->second.lru_iterator);
 		entry_map.erase(iter);
 	}
@@ -198,6 +219,11 @@ private:
 
 	// The timeout in seconds for cache entries; entries with exceeding timeout would be invalidated.
 	const uint64_t timeout_millisec;
+
+	// Bound on the summed weight of all entries; 0 means no bound.
+	const size_t max_weight;
+	const Weigher weigher;
+	size_t total_weight = 0;
 
 	// All keys are stored as refernce (`std::reference_wrapper`), and the ownership lies in `lru_list`.
 	EntryMap entry_map;
@@ -217,12 +243,15 @@ public:
 	using lru_impl = SharedValueLruCache<Key, Val, KeyCompare>;
 	using key_type = typename lru_impl::key_type;
 	using mapped_type = typename lru_impl::mapped_type;
+	using Weigher = typename lru_impl::Weigher;
 
 	// @param max_entries_p: A `max_entries` of 0 means that there is no limit on the number of entries in the cache.
 	// @param timeout_millisec_p: Timeout in milliseconds for entries, exceeding which invalidates the cache entries; 0
 	// means no timeout.
-	ThreadSafeSharedValueLruCache(size_t max_entries, uint64_t timeout_millisec)
-	    : internal_cache(max_entries, timeout_millisec) {
+	// @param max_weight / weigher: see [SharedValueLruCache].
+	ThreadSafeSharedValueLruCache(size_t max_entries, uint64_t timeout_millisec, size_t max_weight = 0,
+	                              Weigher weigher = nullptr)
+	    : internal_cache(max_entries, timeout_millisec, max_weight, std::move(weigher)) {
 	}
 
 	// Disable copy and move.
@@ -268,6 +297,13 @@ public:
 	// Accessors for cache parameters.
 	size_t MaxEntries() const {
 		return internal_cache.MaxEntries();
+	}
+	size_t MaxWeight() const {
+		return internal_cache.MaxWeight();
+	}
+	size_t TotalWeight() const {
+		const concurrency::lock_guard<concurrency::mutex> lock(mu);
+		return internal_cache.TotalWeight();
 	}
 
 	// Get all keys inside of the cache; the order of keys returned is not deterministic.

@@ -9,12 +9,20 @@ namespace duckdb {
 
 shared_ptr<InMemoryDataCacheStorage> BuildInMemoryDataCacheStorage(const string &mode,
                                                                    optional_ptr<DatabaseInstance> db_instance,
-                                                                   size_t max_entries, uint64_t timeout_millisec) {
+                                                                   size_t max_entries, uint64_t timeout_millisec,
+                                                                   size_t max_bytes) {
 	if (mode == *OBJECT_CACHE_STORAGE) {
 		ALWAYS_ASSERT(db_instance != nullptr);
+		// Fail loudly rather than run silently unbounded: a byte budget that is ignored would make
+		// every capacity-sensitive measurement meaningless.
+		if (max_bytes > 0) {
+			throw InvalidInputException("cache_httpfs_max_in_mem_cache_bytes is only supported by the 'extension' "
+			                            "in-memory cache storage, not '%s'",
+			                            mode);
+		}
 		return make_shared_ptr<ObjectCacheStorage>(*db_instance, timeout_millisec);
 	}
-	return make_shared_ptr<ExtensionBoundedDataCacheStorage>(max_entries, timeout_millisec);
+	return make_shared_ptr<ExtensionBoundedDataCacheStorage>(max_entries, timeout_millisec, max_bytes);
 }
 
 } // namespace duckdb
