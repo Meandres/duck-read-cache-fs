@@ -26,7 +26,7 @@ struct CacheReadChunk {
 	idx_t bytes_to_copy = 0;
 
 	// Copy from [buffer] to application-provided buffer.
-	void CopyBufferToRequestedMemory(const PageAlignedDataChunk &buffer);
+	void CopyBufferToRequestedMemory(const PageAlignedDataChunk &buffer) const;
 };
 
 } // namespace duckdb

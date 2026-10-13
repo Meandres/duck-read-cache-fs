@@ -97,6 +97,12 @@ extern const idx_t DEFAULT_MAX_IN_MEM_CACHE_BLOCK_COUNT;
 // Maximum summed data bytes of the in-memory cache; 0 means unbounded (the block count is then the only bound).
 extern const idx_t DEFAULT_MAX_IN_MEM_CACHE_BYTES;
 
+// Whether the in-memory cache reader fetches adjacent missing entries with one read.
+extern const bool DEFAULT_COALESCE_MISSES;
+
+// Upper bound of a single coalesced remote read.
+extern const idx_t DEFAULT_MAX_COALESCED_READ_BYTES;
+
 // Default timeout in milliseconds for in-memory block cache entries.
 extern const idx_t DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC;
 

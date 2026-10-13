@@ -13,10 +13,14 @@
 #include "in_memory_data_cache_storage.hpp"
 #include "mutex.hpp"
 
+#include <future>
+#include <map>
+
 namespace duckdb {
 
 // Forward declarations.
 struct CacheHttpfsInstanceState;
+struct InMemoryCacheReaderConfig;
 
 class InMemoryCacheReader final : public BaseCacheReader {
 public:
@@ -41,10 +45,31 @@ private:
 	// Process a single cache read chunk in a worker thread.
 	void ProcessCacheReadChunk(FileHandle &handle, const string &version_tag, CacheReadChunk cache_read_chunk);
 
+	// Serve [chunks], which cover one read request contiguously and in order.
+	void ReadChunks(FileHandle &handle, const string &version_tag, const vector<CacheReadChunk> &chunks,
+	                idx_t subrequest_count, const InMemoryCacheReaderConfig &config,
+	                const shared_ptr<CacheHttpfsInstanceState> &state);
+	// Same, fetching each run of adjacent missing chunks with as few remote reads as the read size cap allows.
+	void ReadChunksCoalesced(FileHandle &handle, const string &version_tag, const vector<CacheReadChunk> &chunks,
+	                         const InMemoryCacheReaderConfig &config, const shared_ptr<CacheHttpfsInstanceState> &state);
+
+	// An entry being fetched by some thread; others missing on it wait for [done] instead of fetching it again.
+	struct InFlightRead {
+		std::promise<void> promise;
+		std::shared_future<void> done = promise.get_future().share();
+	};
+	// Removes [key] from the in-flight table and wakes its waiters; the entry is in storage by then, unless the
+	// fetch failed.
+	void CompleteInFlight(const InMemCacheBlock &key, InFlightRead &in_flight);
+
 	// Once flag to guard against cache's initialization.
 	std::once_flag cache_init_flag;
 	// In-memory cache to store blocks; late initialized after first access.
 	shared_ptr<InMemoryDataCacheStorage> storage;
+
+	concurrency::mutex in_flight_mutex;
+	std::map<InMemCacheBlock, shared_ptr<InFlightRead>, InMemCacheBlockLess> in_flight
+	    DUCKDB_GUARDED_BY(in_flight_mutex);
 };
 
 } // namespace duckdb

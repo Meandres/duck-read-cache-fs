@@ -82,6 +82,12 @@ const idx_t DEFAULT_MAX_IN_MEM_CACHE_BLOCK_COUNT = 256;
 // Maximum summed data bytes of the in-memory cache; 0 means unbounded.
 const idx_t DEFAULT_MAX_IN_MEM_CACHE_BYTES = 0;
 
+// Whether the in-memory cache reader fetches adjacent missing entries with one read; off reproduces upstream.
+const bool DEFAULT_COALESCE_MISSES = false;
+
+// Upper bound of a single coalesced remote read; 16 MiB is the upper end of the usual S3 range-GET guidance.
+const idx_t DEFAULT_MAX_COALESCED_READ_BYTES = 16ULL * 1024 * 1024;
+
 // Default timeout in milliseconds for in-memory block cache entries.
 const idx_t DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC = 3600ULL * 1000 /*1hour*/;
 

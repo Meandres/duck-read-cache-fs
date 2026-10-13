@@ -14,6 +14,7 @@ set(CATCHFS_UNITTEST_OBJECTS
     test_cache_filesystem_with_mock.cpp
     test_cache_stats_collection_from_unit.cpp
     test_chunk_utils.cpp
+    test_coalesced_reads.cpp
     test_column_chunk_planner.cpp
     test_clear_cache_on_delete.cpp
     test_clear_cache_on_write.cpp

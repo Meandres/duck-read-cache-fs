@@ -148,6 +148,8 @@ vector<CacheAccessInfo> TempProfileCollector::GetCacheAccessInfo() const {
 			cache_access_info[idx].total_bytes_to_read = Value::UBIGINT(total_bytes_to_read);
 			cache_access_info[idx].bytes_read_from_hits = Value::UBIGINT(bytes_read_from_hits);
 			cache_access_info[idx].bytes_read_from_misses = Value::UBIGINT(bytes_read_from_misses);
+			cache_access_info[idx].remote_read_count =
+			    Value::UBIGINT(histograms[static_cast<idx_t>(IoOperation::kRead)]->counts());
 		}
 	}
 	return cache_access_info;

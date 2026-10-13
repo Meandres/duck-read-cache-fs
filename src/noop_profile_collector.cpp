@@ -18,6 +18,7 @@ vector<CacheAccessInfo> NoopProfileCollector::GetCacheAccessInfo() const {
 		cache_access_info[idx].total_bytes_to_cache = Value::UBIGINT(0);
 		cache_access_info[idx].bytes_read_from_hits = Value::UBIGINT(0);
 		cache_access_info[idx].bytes_read_from_misses = Value::UBIGINT(0);
+		cache_access_info[idx].remote_read_count = Value::UBIGINT(0);
 	}
 	return cache_access_info;
 }

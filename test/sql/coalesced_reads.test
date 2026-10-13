@@ -1,0 +1,89 @@
+# name: test/sql/coalesced_reads.test
+# description: Adjacent missing cache entries fetched with one read, for fixed blocks and column chunks.
+# group: [sql]
+
+require cache_httpfs
+
+require parquet
+
+statement ok
+COPY (SELECT range AS a, range * 7 AS b, 'v' || (range % 1000) AS c FROM range(400000))
+TO '__TEST_DIR__/coalesced_reads.parquet' (FORMAT parquet, ROW_GROUP_SIZE 50000);
+
+statement error
+SET cache_httpfs_max_coalesced_read_bytes=0;
+----
+must be greater than 0
+
+statement ok
+SELECT cache_httpfs_wrap_cache_filesystem('LocalFileSystem');
+
+statement ok
+SET cache_httpfs_type='in_mem';
+
+statement ok
+SET cache_httpfs_profile_type='temp';
+
+# Reads as they would be issued to an object store.
+statement ok
+SET prefetch_all_parquet_files=true;
+
+statement ok
+SET cache_httpfs_max_in_mem_cache_block_count=1000000;
+
+statement ok
+SET cache_httpfs_cache_block_size=65536;
+
+statement ok
+SET cache_httpfs_coalesce_misses=true;
+
+statement ok
+SET cache_httpfs_max_coalesced_read_bytes=1048576;
+
+query III
+SELECT sum(a), sum(b), count(DISTINCT c) FROM read_parquet('__TEST_DIR__/coalesced_reads.parquet');
+----
+79999800000	559998600000	1000
+
+# Fixed blocks: fewer reads than blocks cached.
+query I
+SELECT cache_httpfs_get_remote_read_count() < (SELECT count(*) FROM cache_httpfs_cache_status_query());
+----
+true
+
+query III
+SELECT sum(a), sum(b), count(DISTINCT c) FROM read_parquet('__TEST_DIR__/coalesced_reads.parquet');
+----
+79999800000	559998600000	1000
+
+# Column chunks.
+statement ok
+SELECT cache_httpfs_clear_cache();
+
+statement ok
+SET cache_httpfs_chunking='column_chunk';
+
+statement ok
+SELECT cache_httpfs_register_parquet_layout('__TEST_DIR__/coalesced_reads.parquet');
+
+statement ok
+SELECT cache_httpfs_clear_cache();
+
+# Without a filter, DuckDB reads a row group's adjacent column chunks with one request, which is then one GET.
+query III
+SELECT sum(a), sum(b), count(DISTINCT c) FROM read_parquet('__TEST_DIR__/coalesced_reads.parquet');
+----
+79999800000	559998600000	1000
+
+query I
+SELECT cache_httpfs_get_remote_read_count() < (SELECT count(*) FROM cache_httpfs_cache_status_query());
+----
+true
+
+query I
+SELECT sum(b) FROM read_parquet('__TEST_DIR__/coalesced_reads.parquet') WHERE a % 3 = 0;
+----
+186667133331
+
+statement ok
+SELECT cache_httpfs_clear_parquet_layouts();

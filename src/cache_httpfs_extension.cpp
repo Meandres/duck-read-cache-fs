@@ -147,6 +147,19 @@ void GetProfileStats(const DataChunk &args, ExpressionState &state, Vector &resu
 	result.Reference(Value(std::move(latest_stat)));
 }
 
+void GetRemoteReadCount(const DataChunk &args, ExpressionState &state, Vector &result) {
+	auto &instance = GetDatabaseInstance(state);
+	auto &inst_state = GetInstanceStateOrThrow(instance);
+	auto conn_id = GetConnectionId(state);
+	uint64_t count = 0;
+	if (inst_state.profile_collector_manager.HasExplicitProfileCollector(conn_id)) {
+		auto &collector = inst_state.profile_collector_manager.GetProfileCollectorOrDefault(conn_id);
+		const auto &reads = collector.GetCacheAccessInfo()[static_cast<idx_t>(CacheEntity::kData)].remote_read_count;
+		count = reads.IsNull() ? 0 : reads.GetValue<uint64_t>();
+	}
+	result.Reference(Value::UBIGINT(count));
+}
+
 void ResetProfileStats(const DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &instance = GetDatabaseInstance(state);
 	auto &inst_state = GetInstanceStateOrThrow(instance);
@@ -473,6 +486,20 @@ void UpdateChunking(ClientContext &context, SetScope scope, Value &parameter) {
 	inst_state.config.chunking = std::move(chunking_str);
 }
 
+void UpdateCoalesceMisses(ClientContext &context, SetScope scope, Value &parameter) {
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.coalesce_misses = parameter.GetValue<bool>();
+}
+
+void UpdateMaxCoalescedReadBytes(ClientContext &context, SetScope scope, Value &parameter) {
+	const auto max_bytes = parameter.GetValue<uint64_t>();
+	if (max_bytes == 0) {
+		throw InvalidInputException("cache_httpfs_max_coalesced_read_bytes must be greater than 0");
+	}
+	auto &inst_state = GetInstanceStateOrThrow(context);
+	inst_state.config.max_coalesced_read_bytes = max_bytes;
+}
+
 // Read the footer of each given Parquet file and record one cache extent per column chunk. Returns, per row, the
 // number of extents registered for that file.
 void RegisterParquetLayout(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -766,6 +793,20 @@ void LoadInternal(ExtensionLoader &loader) {
 	    "layout was registered with `cache_httpfs_register_parquet_layout`; files without a registered layout keep "
 	    "using fixed blocks. Set it before the first read.",
 	    LogicalType {LogicalTypeId::VARCHAR}, *DEFAULT_CHUNKING, UpdateChunking);
+	config.AddExtensionOption(
+	    "cache_httpfs_coalesce_misses",
+	    "In-memory cache only. When true, the entries of one read that miss and are adjacent in the file are fetched "
+	    "with a single remote read (split into reads of at most `cache_httpfs_max_coalesced_read_bytes`, issued in "
+	    "parallel) and then cached as separate entries, and an entry already being fetched by another thread is "
+	    "waited for instead of fetched again. When false (default), every missing entry is its own remote read, as "
+	    "upstream does. Applies to both fixed blocks and column chunks.",
+	    LogicalType {LogicalTypeId::BOOLEAN}, Value::BOOLEAN(DEFAULT_COALESCE_MISSES), UpdateCoalesceMisses);
+	config.AddExtensionOption(
+	    "cache_httpfs_max_coalesced_read_bytes",
+	    "Largest single remote read (GET) issued when `cache_httpfs_coalesce_misses` is on; a longer run of adjacent "
+	    "missing entries is split into reads of this size.",
+	    LogicalType {LogicalTypeId::UBIGINT}, Value::UBIGINT(DEFAULT_MAX_COALESCED_READ_BYTES),
+	    UpdateMaxCoalescedReadBytes);
 	config.AddExtensionOption("cache_httpfs_in_mem_cache_block_timeout_millisec",
 	                          "Data block cache entry timeout in milliseconds.", LogicalTypeId::UBIGINT,
 	                          Value::UBIGINT(DEFAULT_IN_MEM_BLOCK_CACHE_TIMEOUT_MILLISEC),
@@ -886,6 +927,13 @@ void LoadInternal(ExtensionLoader &loader) {
 	ScalarFunction get_profile_stats_function("cache_httpfs_get_profile", /*arguments=*/ {},
 	                                          /*return_type=*/LogicalType {LogicalTypeId::VARCHAR}, GetProfileStats);
 	loader.RegisterFunction(get_profile_stats_function);
+
+	// Number of data reads sent to the remote filesystem (GET requests) since the last profile reset; needs
+	// `cache_httpfs_profile_type='temp'`.
+	ScalarFunction remote_read_count_function("cache_httpfs_get_remote_read_count", /*arguments=*/ {},
+	                                          /*return_type=*/LogicalType {LogicalTypeId::UBIGINT}, GetRemoteReadCount);
+	remote_read_count_function.SetVolatile();
+	loader.RegisterFunction(remote_read_count_function);
 
 	// Register profile collector metrics reset.
 	ScalarFunction clear_profile_stats_function("cache_httpfs_clear_profile", /*arguments=*/ {},

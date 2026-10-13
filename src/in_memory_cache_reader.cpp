@@ -33,6 +33,8 @@ struct InMemoryCacheReaderConfig {
 	bool enable_cache_validation = DEFAULT_ENABLE_CACHE_VALIDATION;
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
 	string chunking = *DEFAULT_CHUNKING;
+	bool coalesce_misses = DEFAULT_COALESCE_MISSES;
+	idx_t max_coalesced_read_bytes = DEFAULT_MAX_COALESCED_READ_BYTES;
 };
 
 namespace {
@@ -48,6 +50,8 @@ InMemoryCacheReaderConfig GetConfig(const CacheHttpfsInstanceState &instance_sta
 	    .enable_cache_validation = instance_state.config.enable_cache_validation,
 	    .in_mem_cache_storage = instance_state.config.in_mem_cache_storage,
 	    .chunking = instance_state.config.chunking,
+	    .coalesce_misses = instance_state.config.coalesce_misses,
+	    .max_coalesced_read_bytes = instance_state.config.max_coalesced_read_bytes,
 	};
 }
 
@@ -93,6 +97,176 @@ void InMemoryCacheReader::ProcessCacheReadChunk(FileHandle &handle, const string
 	storage->Put(std::move(block_key), std::move(content), version_tag);
 }
 
+void InMemoryCacheReader::ReadChunks(FileHandle &handle, const string &version_tag,
+                                     const vector<CacheReadChunk> &chunks, idx_t subrequest_count,
+                                     const InMemoryCacheReaderConfig &config,
+                                     const shared_ptr<CacheHttpfsInstanceState> &state) {
+	if (config.coalesce_misses) {
+		ReadChunksCoalesced(handle, version_tag, chunks, config, state);
+		return;
+	}
+
+	const auto task_count = GetThreadCountForSubrequests(subrequest_count, config.max_subrequest_count);
+	auto parallel_executor = CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode, task_count);
+	for (const auto &chunk : chunks) {
+		parallel_executor->Schedule(
+		    [this, &handle, &version_tag, chunk]() { ProcessCacheReadChunk(handle, version_tag, chunk); });
+	}
+	parallel_executor->WaitAll();
+}
+
+void InMemoryCacheReader::CompleteInFlight(const InMemCacheBlock &key, InFlightRead &read) {
+	{
+		const concurrency::lock_guard<concurrency::mutex> lck(in_flight_mutex);
+		in_flight.erase(key);
+	}
+	read.promise.set_value();
+}
+
+void InMemoryCacheReader::ReadChunksCoalesced(FileHandle &handle, const string &version_tag,
+                                              const vector<CacheReadChunk> &chunks,
+                                              const InMemoryCacheReaderConfig &config,
+                                              const shared_ptr<CacheHttpfsInstanceState> &state) {
+	auto &cache_handle = handle.Cast<CacheFileSystemHandle>();
+	auto &collector = GetProfileCollectorOrThrow(state, cache_handle.GetConnectionId());
+	auto *internal_filesystem = cache_handle.GetInternalFileSystem();
+	const auto &path = handle.GetPath();
+
+	auto serve_hit = [&](const CacheReadChunk &chunk, const InMemCacheBlock &key) {
+		auto pinned = storage->Get(key, version_tag);
+		if (!pinned) {
+			return false;
+		}
+		collector.RecordCacheAccess(CacheEntity::kData, CacheAccess::kCacheHit, chunk.bytes_to_copy);
+		DUCKDB_LOG_OPEN_CACHE_HIT((handle));
+		chunk.CopyBufferToRequestedMemory(pinned->Data());
+		return true;
+	};
+
+	// Serve hits, claim the misses nobody is fetching, and note the ones somebody else is.
+	vector<shared_ptr<InFlightRead>> claims(chunks.size());
+	vector<std::pair<idx_t, shared_ptr<InFlightRead>>> others;
+	for (idx_t idx = 0; idx < chunks.size(); ++idx) {
+		const auto &chunk = chunks[idx];
+		const InMemCacheBlock key {path, chunk.aligned_start_offset, chunk.chunk_size};
+		if (serve_hit(chunk, key)) {
+			continue;
+		}
+		shared_ptr<InFlightRead> claim;
+		{
+			const concurrency::lock_guard<concurrency::mutex> lck(in_flight_mutex);
+			auto iter = in_flight.find(key);
+			if (iter != in_flight.end()) {
+				others.emplace_back(idx, iter->second);
+				continue;
+			}
+			claim = make_shared_ptr<InFlightRead>();
+			in_flight.emplace(key, claim);
+		}
+		// Its fetch may have completed between the lookup and the claim.
+		if (serve_hit(chunk, key)) {
+			CompleteInFlight(key, *claim);
+			continue;
+		}
+		claims[idx] = std::move(claim);
+	}
+
+	// Runs of claimed chunks that are adjacent in the file; each is fetched into one buffer.
+	struct Run {
+		idx_t first;
+		idx_t last;
+		PageAlignedDataChunk buffer;
+	};
+	vector<Run> runs;
+	for (idx_t idx = 0; idx < chunks.size(); ++idx) {
+		if (!claims[idx]) {
+			continue;
+		}
+		if (!runs.empty() && runs.back().last + 1 == idx &&
+		    chunks[idx - 1].aligned_start_offset + chunks[idx - 1].chunk_size == chunks[idx].aligned_start_offset) {
+			runs.back().last = idx;
+		} else {
+			runs.push_back(Run {idx, idx, {}});
+		}
+	}
+
+	auto release_claims = [&]() {
+		for (idx_t idx = 0; idx < chunks.size(); ++idx) {
+			if (claims[idx]) {
+				CompleteInFlight(InMemCacheBlock {path, chunks[idx].aligned_start_offset, chunks[idx].chunk_size},
+				                 *claims[idx]);
+				claims[idx] = nullptr;
+			}
+		}
+	};
+
+	try {
+		idx_t read_count = 0;
+		for (auto &run : runs) {
+			const idx_t run_bytes = chunks[run.last].aligned_start_offset + chunks[run.last].chunk_size -
+			                        chunks[run.first].aligned_start_offset;
+			run.buffer = AllocatePageAlignedChunk(run_bytes);
+			run.buffer.length = run_bytes;
+			read_count += (run_bytes + config.max_coalesced_read_bytes - 1) / config.max_coalesced_read_bytes;
+		}
+		const auto task_count = GetThreadCountForSubrequests(read_count, config.max_subrequest_count);
+		auto executor = runs.empty() ? nullptr
+		                             : CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode,
+		                                                      task_count);
+		for (auto &run : runs) {
+			const idx_t run_start = chunks[run.first].aligned_start_offset;
+			for (idx_t offset = 0; offset < run.buffer.length; offset += config.max_coalesced_read_bytes) {
+				const idx_t bytes = MinValue<idx_t>(config.max_coalesced_read_bytes, run.buffer.length - offset);
+				char *dest = run.buffer.data() + offset;
+				executor->Schedule([&collector, internal_filesystem, &cache_handle, dest, bytes, run_start, offset]() {
+					SetThreadName("RdCachRdThd");
+					const auto latency_guard = collector.RecordOperationStart(IoOperation::kRead);
+					internal_filesystem->Read(*cache_handle.internal_file_handle, dest, bytes, run_start + offset);
+				});
+			}
+		}
+		if (executor) {
+			executor->WaitAll();
+		}
+
+		// Cut each run into its entries.
+		for (auto &run : runs) {
+			const idx_t run_start = chunks[run.first].aligned_start_offset;
+			for (idx_t idx = run.first; idx <= run.last; ++idx) {
+				const auto &chunk = chunks[idx];
+				PageAlignedDataChunk content;
+				if (run.first == run.last) {
+					content = std::move(run.buffer);
+				} else {
+					content = AllocatePageAlignedChunk(chunk.chunk_size);
+					content.length = chunk.chunk_size;
+					run.buffer.CopyTo(content.data(), chunk.aligned_start_offset - run_start, chunk.chunk_size);
+				}
+				collector.RecordCacheAccess(CacheEntity::kData, CacheAccess::kCacheMiss, chunk.bytes_to_copy);
+				DUCKDB_LOG_OPEN_CACHE_MISS((handle));
+				chunk.CopyBufferToRequestedMemory(content);
+				InMemCacheBlock key {path, chunk.aligned_start_offset, chunk.chunk_size};
+				storage->Put(key, std::move(content), version_tag);
+				CompleteInFlight(key, *claims[idx]);
+				claims[idx] = nullptr;
+			}
+		}
+	} catch (...) {
+		release_claims();
+		throw;
+	}
+
+	// Only now wait for other threads' fetches: ours are all complete, so no two readers can wait on each other.
+	for (auto &other : others) {
+		other.second->done.wait();
+		const auto &chunk = chunks[other.first];
+		if (!serve_hit(chunk, InMemCacheBlock {path, chunk.aligned_start_offset, chunk.chunk_size})) {
+			// Their fetch failed, or the entry was already evicted.
+			ProcessCacheReadChunk(handle, version_tag, chunk);
+		}
+	}
+}
+
 void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t requested_start_offset,
                                        idx_t requested_bytes_to_read, idx_t file_size) {
 	if (requested_bytes_to_read == 0) {
@@ -123,17 +297,13 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 		};
 		const auto planned_chunks = PlanColumnChunks(plan_request, handle.GetPath());
 		if (!planned_chunks.empty()) {
-			const auto task_count = GetThreadCountForSubrequests(planned_chunks.size(), config.max_subrequest_count);
-			auto executor = CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode, task_count);
 			const string version_tag =
 			    config.enable_cache_validation ? handle.Cast<CacheFileSystemHandle>().GetVersionTag() : "";
 			idx_t total_bytes_to_cache = 0;
 			for (const auto &chunk : planned_chunks) {
 				total_bytes_to_cache += chunk.chunk_size;
-				executor->Schedule(
-				    [this, &handle, &version_tag, chunk]() { ProcessCacheReadChunk(handle, version_tag, chunk); });
 			}
-			executor->WaitAll();
+			ReadChunks(handle, version_tag, planned_chunks, planned_chunks.size(), config, state);
 
 			auto &collector = GetProfileCollectorOrThrow(state, handle.Cast<CacheFileSystemHandle>().GetConnectionId());
 			collector.RecordActualCacheRead(/*cache_size=*/total_bytes_to_cache,
@@ -155,15 +325,14 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 	// Used to calculate bytes to copy for last chunk.
 	idx_t already_read_bytes = 0;
 
-	// Threads to parallelly perform IO.
-	const auto task_count = GetThreadCountForSubrequests(alignment_info.subrequest_count, config.max_subrequest_count);
-	auto parallel_executor = CreateParallelExecutor(state->db_instance, state->config.parallel_read_mode, task_count);
 	// Get file-level metadata once before processing chunks.
 	string version_tag = config.enable_cache_validation ? handle.Cast<CacheFileSystemHandle>().GetVersionTag() : "";
 
 	// To improve IO performance, we split requested bytes (after alignment) into multiple chunks and fetch them in
 	// parallel.
 	idx_t total_bytes_to_cache = 0;
+	vector<CacheReadChunk> chunks;
+	chunks.reserve(alignment_info.subrequest_count);
 	for (idx_t io_start_offset = alignment_info.aligned_start_offset;
 	     io_start_offset <= alignment_info.aligned_last_chunk_offset; io_start_offset += block_size) {
 		// No bytes to read for the last chunk.
@@ -214,14 +383,10 @@ void InMemoryCacheReader::ReadAndCache(FileHandle &handle, char *buffer, idx_t r
 		// Update read offset for next chunk read.
 		requested_start_offset = io_start_offset + block_size;
 
-		// Perform read operation in parallel.
-		parallel_executor->Schedule([this, &handle, &version_tag, cache_read_chunk]() {
-			ProcessCacheReadChunk(handle, version_tag, cache_read_chunk);
-		});
+		chunks.push_back(cache_read_chunk);
 	}
 
-	// Block wait for all IO operations to complete.
-	parallel_executor->WaitAll();
+	ReadChunks(handle, version_tag, chunks, alignment_info.subrequest_count, config, state);
 
 	// Record "bytes to read" and "bytes to cache".
 	auto &cache_handle_for_profile = handle.Cast<CacheFileSystemHandle>();

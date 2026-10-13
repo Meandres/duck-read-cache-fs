@@ -42,6 +42,9 @@ struct CacheAccessInfo {
 	// Only made for data cache.
 	// Bytes fetched from remote (cache misses).
 	Value bytes_read_from_misses = Value {};
+	// Only made for data cache.
+	// Number of reads issued to the remote filesystem, i.e. GET requests for object stores.
+	Value remote_read_count = Value {};
 };
 
 bool operator<(const CacheAccessInfo &lhs, const CacheAccessInfo &rhs);

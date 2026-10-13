@@ -137,6 +137,9 @@ struct InstanceConfig {
 	string in_mem_cache_storage = *DEFAULT_IN_MEM_CACHE_STORAGE;
 	// Entry granularity of the in-memory cache reader: 'block' or 'column_chunk'.
 	string chunking = *DEFAULT_CHUNKING;
+	// Fetch adjacent missing entries of a read with one remote read, of at most `max_coalesced_read_bytes`.
+	bool coalesce_misses = DEFAULT_COALESCE_MISSES;
+	idx_t max_coalesced_read_bytes = DEFAULT_MAX_COALESCED_READ_BYTES;
 
 	// Metadata cache config
 	bool enable_metadata_cache = DEFAULT_ENABLE_METADATA_CACHE;
