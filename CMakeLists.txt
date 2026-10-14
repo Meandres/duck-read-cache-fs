@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.10 FATAL_ERROR)
 
-# TODO(hjiang): Upgrade to higher version.
-set(CMAKE_CXX_STANDARD 14)
 
 set(TARGET_NAME cache_httpfs)
 
@@ -35,7 +33,7 @@ set(LOADABLE_EXTENSION_NAME ${TARGET_NAME}_loadable_extension)
 project(${TARGET_NAME})
 include_directories(src/utils/include)
 include_directories(src/include)
-include_directories(duckdb-httpfs/src/include)
+include_directories(duckdb-httpfs/src/include duckdb-httpfs/src/include/http duckdb-httpfs/src/include/s3)
 include_directories(duckdb/third_party/httplib)
 
 # TODO(hjiang): httpfs has wasm client implementation, which is intentionally
@@ -81,19 +79,7 @@ set(EXTENSION_SOURCES
     src/utils/duckdb_task_parallel_executor.cpp
     src/utils/thread_utils.cpp
     src/utils/time_utils.cpp
-    src/utils/url_utils.cpp
-    duckdb-httpfs/src/create_secret_functions.cpp
-    duckdb-httpfs/src/crypto.cpp
-    duckdb-httpfs/src/hash_functions.cpp
-    duckdb-httpfs/src/hffs.cpp
-    duckdb-httpfs/src/http_state.cpp
-    duckdb-httpfs/src/httpfs.cpp
-    duckdb-httpfs/src/httpfs_connection_caching.cpp
-    duckdb-httpfs/src/httpfs_curl_client.cpp
-    duckdb-httpfs/src/httpfs_extension.cpp
-    duckdb-httpfs/src/httpfs_httplib_client.cpp
-    duckdb-httpfs/src/s3fs.cpp
-    duckdb-httpfs/src/s3_multi_part_upload.cpp)
+    src/utils/url_utils.cpp)
 
 # Avoid building tooling we won't need for release.
 set(BUILD_BENCHMARKS

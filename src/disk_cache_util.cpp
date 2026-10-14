@@ -4,7 +4,7 @@
 
 #include "duckdb/common/assert.hpp"
 #include "cache_filesystem_config.hpp"
-#include "crypto.hpp"
+#include "hash_utils.hpp"
 #include "cache_httpfs_instance_state.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/local_file_system.hpp"
@@ -88,7 +88,7 @@ idx_t GetCacheDirectoryIdx(const duckdb::hash_bytes &remote_file_sha256_val, idx
 void PopulateRemoteFileCacheKey(const string &remote_file, duckdb::hash_bytes &remote_file_sha256_val,
                                 string &remote_file_sha256_hex, string &sanitized_fname) {
 	static_assert(sizeof(remote_file_sha256_val) == 32);
-	duckdb::sha256(remote_file.data(), remote_file.length(), remote_file_sha256_val);
+	Sha256(remote_file.data(), remote_file.length(), remote_file_sha256_val);
 	remote_file_sha256_hex = Sha256ToHexString(remote_file_sha256_val);
 	sanitized_fname = StringUtil::GetFileName(SanitizedCachePath(remote_file).Path());
 }

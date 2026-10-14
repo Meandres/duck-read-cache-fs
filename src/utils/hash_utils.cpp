@@ -1,6 +1,6 @@
 #include "hash_utils.hpp"
 
-#include "crypto.hpp"
+#include "mbedtls_wrapper.hpp"
 
 namespace duckdb {
 
@@ -17,10 +17,14 @@ string Sha256ToHexString(const hash_bytes &sha256) {
 	return result;
 }
 
+void Sha256(const char *data, idx_t len, hash_bytes &out) {
+	duckdb_mbedtls::MbedTlsWrapper::ComputeSha256Hash(data, len, reinterpret_cast<char *>(out));
+}
+
 string GetSha256(const string &input) {
 	duckdb::hash_bytes sha256_val;
 	static_assert(sizeof(sha256_val) == 32);
-	duckdb::sha256(input.data(), input.length(), sha256_val);
+	Sha256(input.data(), input.length(), sha256_val);
 	return Sha256ToHexString(sha256_val);
 }
 

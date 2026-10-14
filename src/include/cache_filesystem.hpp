@@ -5,6 +5,7 @@
 #include "base_profile_collector.hpp"
 #include "cache_httpfs_instance_state.hpp"
 #include "counter.hpp"
+#include "duckdb/common/compressed_file_system.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/open_file_info.hpp"
 #include "duckdb/common/optional_ptr.hpp"
@@ -179,8 +180,8 @@ public:
 	void RegisterSubSystem(unique_ptr<FileSystem> sub_fs) override {
 		internal_filesystem->RegisterSubSystem(std::move(sub_fs));
 	}
-	void RegisterSubSystem(FileCompressionType compression_type, unique_ptr<FileSystem> fs) override {
-		internal_filesystem->RegisterSubSystem(compression_type, std::move(fs));
+	void RegisterCompressionFilesystem(unique_ptr<CompressedFileSystem> fs) override {
+		internal_filesystem->RegisterCompressionFilesystem(std::move(fs));
 	}
 	void UnregisterSubSystem(const string &name) override {
 		internal_filesystem->UnregisterSubSystem(name);

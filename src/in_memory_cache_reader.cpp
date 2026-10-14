@@ -4,7 +4,7 @@
 #include "cache_filesystem_logger.hpp"
 #include "cache_httpfs_instance_state.hpp"
 #include "cache_read_chunk.hpp"
-#include "crypto.hpp"
+#include "hash_utils.hpp"
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/thread.hpp"

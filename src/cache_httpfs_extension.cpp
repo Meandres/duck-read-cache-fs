@@ -21,7 +21,10 @@
 #include "duckdb/main/extension_callback_manager.hpp"
 #include "duckdb/main/extension_manager.hpp"
 #include "duckdb/main/setting_info.hpp"
-#include "duckdb/storage/external_file_cache.hpp"
+#include "duckdb/storage/external_file_cache/external_file_cache.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "extension_config_query_function.hpp"
 #include "fake_filesystem.hpp"
 #include "filesystem_status_query_function.hpp"
@@ -78,7 +81,7 @@ void ClearAllCache(const DataChunk &args, ExpressionState &state, Vector &result
 	auto conn_id = GetConnectionId(state);
 	inst_state.profile_collector_manager.ResetProfileCollector(conn_id);
 
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 void ClearCacheForFile(const DataChunk &args, ExpressionState &state, Vector &result) {
@@ -98,7 +101,7 @@ void ClearCacheForFile(const DataChunk &args, ExpressionState &state, Vector &re
 		cur_cache_fs->ClearCache(filepath, conn_id);
 	}
 
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 // Clean up dead temporary cache files (creation time older than 10 minutes). Returns the number of files deleted.
@@ -107,7 +110,7 @@ void CleanupDeadTemp(const DataChunk &args, ExpressionState &state, Vector &resu
 	auto &inst_state = GetInstanceStateOrThrow(instance);
 	const idx_t deleted = DiskCacheUtil::CleanupDeadTempFiles(inst_state.config.on_disk_cache_directories, &instance,
 	                                                          inst_state.config.parallel_read_mode);
-	result.Reference(Value::BIGINT(NumericCast<int64_t>(deleted)));
+	result.Reference(Value::BIGINT(NumericCast<int64_t>(deleted)), count_t(args.size()));
 }
 
 // Get on-disk data cache file size for all cache filesystems.
@@ -125,7 +128,7 @@ void GetOnDiskDataCacheSize(const DataChunk &args, ExpressionState &state, Vecto
 			total_cache_size += local_filesystem->GetFileSize(*file_handle);
 		});
 	}
-	result.Reference(Value(total_cache_size));
+	result.Reference(Value(total_cache_size), count_t(args.size()));
 }
 
 void GetProfileStats(const DataChunk &args, ExpressionState &state, Vector &result) {
@@ -134,7 +137,7 @@ void GetProfileStats(const DataChunk &args, ExpressionState &state, Vector &resu
 	auto conn_id = GetConnectionId(state);
 
 	if (!inst_state.profile_collector_manager.HasExplicitProfileCollector(conn_id)) {
-		result.Reference(Value("No valid access to cache filesystem"));
+		result.Reference(Value("No valid access to cache filesystem"), count_t(args.size()));
 		return;
 	}
 
@@ -144,7 +147,7 @@ void GetProfileStats(const DataChunk &args, ExpressionState &state, Vector &resu
 	if (latest_stat.empty()) {
 		latest_stat = "No valid access to cache filesystem";
 	}
-	result.Reference(Value(std::move(latest_stat)));
+	result.Reference(Value(std::move(latest_stat)), count_t(args.size()));
 }
 
 void GetRemoteReadCount(const DataChunk &args, ExpressionState &state, Vector &result) {
@@ -157,7 +160,7 @@ void GetRemoteReadCount(const DataChunk &args, ExpressionState &state, Vector &r
 		const auto &reads = collector.GetCacheAccessInfo()[static_cast<idx_t>(CacheEntity::kData)].remote_read_count;
 		count = reads.IsNull() ? 0 : reads.GetValue<uint64_t>();
 	}
-	result.Reference(Value::UBIGINT(count));
+	result.Reference(Value::UBIGINT(count), count_t(args.size()));
 }
 
 void ResetProfileStats(const DataChunk &args, ExpressionState &state, Vector &result) {
@@ -165,7 +168,7 @@ void ResetProfileStats(const DataChunk &args, ExpressionState &state, Vector &re
 	auto &inst_state = GetInstanceStateOrThrow(instance);
 	auto conn_id = GetConnectionId(state);
 	inst_state.profile_collector_manager.ResetProfileCollector(conn_id);
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 // Wrap the filesystem with extension cache filesystem.
@@ -195,7 +198,7 @@ void WrapCacheFileSystem(const DataChunk &args, ExpressionState &state, Vector &
 	vfs.RegisterSubSystem(std::move(cache_filesystem));
 	DUCKDB_LOG_DEBUG(duckdb_instance, StringUtil::Format("Wrap filesystem %s with cache filesystem.", filesystem_name));
 
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 // Extract or get httpfs filesystem.
@@ -252,20 +255,9 @@ bool IsHttpfsExtensionLoaded(DatabaseInstance &db_instance) {
 
 // Ensure httpfs extension is loaded, loading it if necessary
 void EnsureHttpfsExtensionLoaded(ExtensionLoader &loader, DatabaseInstance &instance) {
-	const bool httpfs_extension_loaded = IsHttpfsExtensionLoaded(instance);
-	if (httpfs_extension_loaded) {
-		return;
+	if (!IsHttpfsExtensionLoaded(instance)) {
+		ExtensionHelper::AutoLoadExtension(instance, HTTPFS_EXTENSION);
 	}
-	auto httpfs_extension = make_uniq<HttpfsExtension>();
-	httpfs_extension->Load(loader);
-
-	// Register into extension manager to keep compatibility as httpfs.
-	auto &extension_manager = ExtensionManager::Get(instance);
-	auto extension_active_load = extension_manager.BeginLoad(HTTPFS_EXTENSION);
-	// Manually fill in the extension install info to finalize extension load.
-	ExtensionInstallInfo extension_install_info;
-	extension_install_info.mode = ExtensionInstallMode::UNKNOWN;
-	extension_active_load->FinishLoad(extension_install_info);
 }
 
 //===--------------------------------------------------------------------===//
@@ -511,7 +503,7 @@ void RegisterParquetLayout(DataChunk &args, ExpressionState &state, Vector &resu
 
 void ClearParquetLayouts(const DataChunk &args, ExpressionState &state, Vector &result) {
 	ParquetLayoutRegistry::Get().Clear();
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 void UpdateParallelReadMode(ClientContext &context, SetScope scope, Value &parameter) {

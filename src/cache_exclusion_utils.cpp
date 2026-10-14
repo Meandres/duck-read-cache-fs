@@ -38,7 +38,7 @@ struct ListCacheExclusionRegexData : public GlobalTableFunctionState {
 
 unique_ptr<FunctionData> ListCacheExclusionRegexQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
                                                               vector<LogicalType> &return_types,
-                                                              vector<string> &names) {
+                                                              vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 
@@ -94,13 +94,13 @@ void AddCacheExclusionRegex(const DataChunk &args, ExpressionState &state, Vecto
 
 	auto &exclusion_manager = GetExclusionManagerOrThrow(state);
 	exclusion_manager.AddExclusionRegex(regex);
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 void ResetCacheExclusionRegex(const DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &exclusion_manager = GetExclusionManagerOrThrow(state);
 	exclusion_manager.ResetExclusionRegex();
-	result.Reference(Value(SUCCESS));
+	result.Reference(Value(SUCCESS), count_t(args.size()));
 }
 
 TableFunction ListCacheExclusionRegex() {

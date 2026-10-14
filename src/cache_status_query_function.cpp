@@ -28,7 +28,7 @@ struct DataCacheStatusData : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> DataCacheStatusQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 
@@ -137,7 +137,7 @@ struct CacheAccessInfoData : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> CacheAccessInfoQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 
@@ -297,7 +297,7 @@ struct WrappedFilesystemsData : public GlobalTableFunctionState {
 };
 
 unique_ptr<FunctionData> WrappedCacheFileSystemsFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                         vector<LogicalType> &return_types, vector<string> &names) {
+                                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 

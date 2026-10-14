@@ -3,7 +3,6 @@
 #include "cache_filesystem_config.hpp"
 #include "cache_httpfs_instance_state.hpp"
 #include "duckdb/common/assert.hpp"
-#include "duckdb/common/extra_type_info.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -47,7 +46,7 @@ Value GetCacheExclusionRegexes(CacheHttpfsInstanceState &state) {
 }
 
 void DataCacheConfigQueryFuncBindImpl(const InstanceConfig &config, vector<LogicalType> &return_types,
-                                      vector<string> &names) {
+                                      vector<Identifier> &names) {
 	return_types.emplace_back(LogicalType {LogicalTypeId::VARCHAR});
 	names.emplace_back("data cache type");
 	if (config.cache_type == *ON_DISK_CACHE_TYPE) {
@@ -85,7 +84,7 @@ void FillDataCacheConfig(const InstanceConfig &config, DataChunk &output, idx_t 
 }
 
 void MetadataCacheConfigQueryFuncBindImpl(const InstanceConfig &config, vector<LogicalType> &return_types,
-                                          vector<string> &names) {
+                                          vector<Identifier> &names) {
 	return_types.emplace_back(LogicalType {LogicalTypeId::VARCHAR});
 	names.emplace_back("metadata cache type");
 	if (config.enable_metadata_cache) {
@@ -104,7 +103,7 @@ void FillMetadataCacheConfig(const InstanceConfig &config, DataChunk &output, id
 }
 
 void FileHandleCacheConfigQueryFuncBindImpl(const InstanceConfig &config, vector<LogicalType> &return_types,
-                                            vector<string> &names) {
+                                            vector<Identifier> &names) {
 	return_types.emplace_back(LogicalType {LogicalTypeId::VARCHAR});
 	names.emplace_back("file handle cache type");
 	if (config.enable_file_handle_cache) {
@@ -123,7 +122,7 @@ void FillFileHandleCacheConfig(const InstanceConfig &config, DataChunk &output, 
 }
 
 void GlobCacheConfigQueryFuncBindImpl(const InstanceConfig &config, vector<LogicalType> &return_types,
-                                      vector<string> &names) {
+                                      vector<Identifier> &names) {
 	return_types.emplace_back(LogicalType {LogicalTypeId::VARCHAR});
 	names.emplace_back("glob cache type");
 	if (config.enable_glob_cache) {
@@ -152,7 +151,7 @@ InstanceConfig GetConfigFromContext(ClientContext &context) {
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> DataCacheConfigQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 	auto config = GetConfigFromContext(context);
@@ -186,7 +185,7 @@ void DataCacheConfigQueryTableFunc(ClientContext &context, TableFunctionInput &d
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> MetadataCacheConfigQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                          vector<LogicalType> &return_types, vector<string> &names) {
+                                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 	auto config = GetConfigFromContext(context);
@@ -220,7 +219,7 @@ void MetadataCacheConfigQueryTableFunc(ClientContext &context, TableFunctionInpu
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> FileHandleCacheConfigQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                            vector<LogicalType> &return_types, vector<string> &names) {
+                                                            vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 	auto config = GetConfigFromContext(context);
@@ -254,7 +253,7 @@ void FileHandleCacheConfigQueryTableFunc(ClientContext &context, TableFunctionIn
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> GlobCacheConfigQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 	auto config = GetConfigFromContext(context);
@@ -288,7 +287,7 @@ void GlobCacheConfigQueryTableFunc(ClientContext &context, TableFunctionInput &d
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> CacheTypeQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                vector<LogicalType> &return_types, vector<string> &names) {
+                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 
@@ -360,7 +359,7 @@ void CacheTypeQueryTableFunc(ClientContext &context, TableFunctionInput &data_p,
 //===--------------------------------------------------------------------===//
 
 unique_ptr<FunctionData> CacheConfigQueryFuncBind(ClientContext &context, TableFunctionBindInput &input,
-                                                  vector<LogicalType> &return_types, vector<string> &names) {
+                                                  vector<LogicalType> &return_types, vector<Identifier> &names) {
 	ALWAYS_ASSERT(return_types.empty());
 	ALWAYS_ASSERT(names.empty());
 
